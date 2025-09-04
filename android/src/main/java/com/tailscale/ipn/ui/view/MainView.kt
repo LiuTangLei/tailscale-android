@@ -1,8 +1,10 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
+
 package com.tailscale.ipn.ui.view
 
 import android.os.Build
+import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -11,6 +13,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -32,6 +35,7 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -59,6 +63,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
@@ -83,6 +88,7 @@ import com.tailscale.ipn.ui.Links
 import com.tailscale.ipn.ui.model.Ipn
 import com.tailscale.ipn.ui.model.IpnLocal
 import com.tailscale.ipn.ui.model.Netmap
+import com.tailscale.ipn.ui.model.PeerAwgStatus
 import com.tailscale.ipn.ui.model.Permissions
 import com.tailscale.ipn.ui.model.Tailcfg
 import com.tailscale.ipn.ui.theme.customErrorContainer
@@ -127,131 +133,150 @@ fun MainView(
     loginAtUrl: (String) -> Unit,
     navigation: MainViewNavigation,
     viewModel: MainViewModel,
-    appViewModel: AppViewModel
+    appViewModel: AppViewModel,
 ) {
-  val currentPingDevice by viewModel.pingViewModel.peer.collectAsState()
-  val healthIcon by viewModel.healthIcon.collectAsState()
+    val currentPingDevice by viewModel.pingViewModel.peer.collectAsState()
+    val healthIcon by viewModel.healthIcon.collectAsState()
 
-  LoadingIndicator.Wrap {
-    Scaffold(contentWindowInsets = WindowInsets.Companion.statusBars) { paddingInsets ->
-      Column(
-          modifier = Modifier.fillMaxWidth().padding(paddingInsets),
-          verticalArrangement = Arrangement.Center) {
-            // Assume VPN has been prepared for optimistic UI. Whether or not it has been prepared
-            // cannot be known
-            // until permission has been granted to prepare the VPN.
-            val isPrepared by viewModel.isVpnPrepared.collectAsState(initial = true)
-            val isOn by viewModel.vpnToggleState.collectAsState(initial = false)
-            val state by viewModel.ipnState.collectAsState(initial = Ipn.State.NoState)
-            val user by viewModel.loggedInUser.collectAsState(initial = null)
-            val stateVal by viewModel.stateRes.collectAsState(initial = R.string.placeholder)
-            val stateStr = stringResource(id = stateVal)
-            val netmap by viewModel.netmap.collectAsState(initial = null)
-            val showExitNodePicker by MDMSettings.exitNodesPicker.flow.collectAsState()
-            val disableToggle by MDMSettings.forceEnabled.flow.collectAsState()
-            val showKeyExpiry by viewModel.showExpiry.collectAsState(initial = false)
+    LoadingIndicator.Wrap {
+        Scaffold(contentWindowInsets = WindowInsets.Companion.statusBars) { paddingInsets ->
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(paddingInsets),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                // Assume VPN has been prepared for optimistic UI. Whether or not it has been prepared
+                // cannot be known
+                // until permission has been granted to prepare the VPN.
+                val isPrepared by viewModel.isVpnPrepared.collectAsState(initial = true)
+                val isOn by viewModel.vpnToggleState.collectAsState(initial = false)
+                val state by viewModel.ipnState.collectAsState(initial = Ipn.State.NoState)
+                val user by viewModel.loggedInUser.collectAsState(initial = null)
+                val stateVal by viewModel.stateRes.collectAsState(initial = R.string.placeholder)
+                val stateStr = stringResource(id = stateVal)
+                val netmap by viewModel.netmap.collectAsState(initial = null)
+                val showExitNodePicker by MDMSettings.exitNodesPicker.flow.collectAsState()
+                val disableToggle by MDMSettings.forceEnabled.flow.collectAsState()
+                val showKeyExpiry by viewModel.showExpiry.collectAsState(initial = false)
 
-            // Hide the header only on Android TV when the user needs to login
-            val hideHeader = (isAndroidTV() && state == Ipn.State.NeedsLogin)
-            ListItem(
-                colors = MaterialTheme.colorScheme.surfaceContainerListItem,
-                leadingContent = {
-                  if (!hideHeader) {
-                    TintedSwitch(
-                        checked = isOn,
-                        enabled =
-                            !disableToggle.value &&
-                                !viewModel.isToggleInProgress
-                                    .value, // Disable switch if toggle is in progress
-                        onCheckedChange = { desiredState -> viewModel.toggleVpn(desiredState) })
-                  }
-                },
-                headlineContent = {
-                  user?.NetworkProfile?.DomainName?.let { domain ->
-                    AutoResizingText(
-                        text = domain,
-                        style = MaterialTheme.typography.titleMedium.short,
-                        minFontSize = MaterialTheme.typography.minTextSize,
-                        overflow = TextOverflow.Ellipsis)
-                  }
-                },
-                supportingContent = {
-                  if (!hideHeader) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                      Text(text = stateStr, style = MaterialTheme.typography.bodyMedium.short)
-                      healthIcon?.let {
-                        Spacer(modifier = Modifier.size(4.dp))
-                        IconButton(
-                            onClick = { navigation.onNavigateToHealth() },
-                            modifier = Modifier.size(16.dp)) {
-                              Icon(
-                                  painterResource(id = it),
-                                  contentDescription = null,
-                                  modifier = Modifier.size(16.dp),
-                                  tint = MaterialTheme.colorScheme.error)
+                // Hide the header only on Android TV when the user needs to login
+                val hideHeader = (isAndroidTV() && state == Ipn.State.NeedsLogin)
+                ListItem(
+                    colors = MaterialTheme.colorScheme.surfaceContainerListItem,
+                    leadingContent = {
+                        if (!hideHeader) {
+                            TintedSwitch(
+                                checked = isOn,
+                                enabled =
+                                    !disableToggle.value &&
+                                        !viewModel.isToggleInProgress
+                                            .value, // Disable switch if toggle is in progress
+                                onCheckedChange = { desiredState -> viewModel.toggleVpn(desiredState) },
+                            )
+                        }
+                    },
+                    headlineContent = {
+                        user?.NetworkProfile?.DomainName?.let { domain ->
+                            AutoResizingText(
+                                text = domain,
+                                style = MaterialTheme.typography.titleMedium.short,
+                                minFontSize = MaterialTheme.typography.minTextSize,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    },
+                    supportingContent = {
+                        if (!hideHeader) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = stateStr, style = MaterialTheme.typography.bodyMedium.short)
+                                healthIcon?.let {
+                                    Spacer(modifier = Modifier.size(4.dp))
+                                    IconButton(
+                                        onClick = { navigation.onNavigateToHealth() },
+                                        modifier = Modifier.size(16.dp),
+                                    ) {
+                                        Icon(
+                                            painterResource(id = it),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp),
+                                            tint = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+                                }
                             }
-                      }
-                    }
-                  }
-                },
-                trailingContent = {
-                  Box(modifier = Modifier.padding(8.dp), contentAlignment = Alignment.CenterEnd) {
-                    when (user) {
-                      null -> SettingsButton { navigation.onNavigateToSettings() }
-                      else -> {
-                        Avatar(
-                            profile = user,
-                            size = 36,
-                            { navigation.onNavigateToSettings() },
-                            isFocusable = true)
-                      }
-                    }
-                  }
-                })
-            when (state) {
-              Ipn.State.Running -> {
-                viewModel.maybeRequestVpnPermission()
-                LaunchVpnPermissionIfNeeded(viewModel)
-                PromptForMissingPermissions(viewModel)
+                        }
+                    },
+                    trailingContent = {
+                        Box(modifier = Modifier.padding(8.dp), contentAlignment = Alignment.CenterEnd) {
+                            when (user) {
+                                null -> SettingsButton { navigation.onNavigateToSettings() }
+                                else -> {
+                                    Avatar(
+                                        profile = user,
+                                        size = 36,
+                                        { navigation.onNavigateToSettings() },
+                                        isFocusable = true,
+                                    )
+                                }
+                            }
+                        }
+                    },
+                )
+                when (state) {
+                    Ipn.State.Running -> {
+                        viewModel.maybeRequestVpnPermission()
+                        LaunchVpnPermissionIfNeeded(viewModel)
+                        PromptForMissingPermissions(viewModel)
 
-                if (showKeyExpiry) {
-                  ExpiryNotification(netmap = netmap, action = { viewModel.login() })
+                        if (showKeyExpiry) {
+                            ExpiryNotification(netmap = netmap, action = { viewModel.login() })
+                        }
+                        if (showExitNodePicker.value == ShowHide.Show) {
+                            ExitNodeStatus(navAction = navigation.onNavigateToExitNodes, viewModel = viewModel)
+                        }
+                        PeerList(
+                            viewModel = viewModel,
+                            onNavigateToPeerDetails = navigation.onNavigateToPeerDetails,
+                            onSearchBarClick = navigation.onNavigateToSearch,
+                            onSearch = { viewModel.searchPeers(it) },
+                        )
+                    }
+                    Ipn.State.NoState,
+                    Ipn.State.Starting,
+                    -> StartingView()
+                    else -> {
+                        ConnectView(
+                            state,
+                            isPrepared,
+                            // If Tailscale is stopping, don't automatically restart; wait for user to take
+                            // action (eg, if the user connected to another VPN).
+                            state != Ipn.State.Stopping,
+                            user,
+                            { viewModel.toggleVpn(desiredState = !isOn) },
+                            { viewModel.login() },
+                            loginAtUrl,
+                            netmap?.SelfNode,
+                            { viewModel.showVPNPermissionLauncherIfUnauthorized() },
+                        )
+                    }
                 }
-                if (showExitNodePicker.value == ShowHide.Show) {
-                  ExitNodeStatus(
-                      navAction = navigation.onNavigateToExitNodes, viewModel = viewModel)
-                }
-                PeerList(
-                    viewModel = viewModel,
-                    onNavigateToPeerDetails = navigation.onNavigateToPeerDetails,
-                    onSearchBarClick = navigation.onNavigateToSearch,
-                    onSearch = { viewModel.searchPeers(it) })
-              }
-              Ipn.State.NoState,
-              Ipn.State.Starting -> StartingView()
-              else -> {
-                ConnectView(
-                    state,
-                    isPrepared,
-                    // If Tailscale is stopping, don't automatically restart; wait for user to take
-                    // action (eg, if the user connected to another VPN).
-                    state != Ipn.State.Stopping,
-                    user,
-                    { viewModel.toggleVpn(desiredState = !isOn) },
-                    { viewModel.login() },
-                    loginAtUrl,
-                    netmap?.SelfNode,
-                    { viewModel.showVPNPermissionLauncherIfUnauthorized() })
-              }
             }
-          }
-      currentPingDevice?.let { _ ->
-        ModalBottomSheet(onDismissRequest = { viewModel.onPingDismissal() }) {
-          PingView(model = viewModel.pingViewModel)
+            currentPingDevice?.let { _ ->
+                ModalBottomSheet(onDismissRequest = { viewModel.onPingDismissal() }) {
+                    PingView(model = viewModel.pingViewModel)
+                }
+            }
         }
-      }
+
+        // AWG Status Toast
+        val awgStatusMessage by viewModel.awgStatusMessage.collectAsState()
+        val context = LocalContext.current
+        LaunchedEffect(awgStatusMessage) {
+            awgStatusMessage?.let { message ->
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                viewModel.clearAwgStatusMessage()
+            }
+        }
     }
-  }
 }
 
 @Composable
@@ -550,157 +575,240 @@ fun PeerList(
     onSearchBarClick: () -> Unit,
     onSearch: (String) -> Unit,
 ) {
-  val peerList by viewModel.peers.collectAsState(initial = emptyList<PeerSet>())
-  val searchTermStr by viewModel.searchTerm.collectAsState(initial = "")
-  val showNoResults =
-      remember { derivedStateOf { searchTermStr.isNotEmpty() && peerList.isEmpty() } }.value
-  val netmap = viewModel.netmap.collectAsState()
-  val focusManager = LocalFocusManager.current
-  var isSearchFocussed by remember { mutableStateOf(false) }
-  var isListFocussed by remember { mutableStateOf(false) }
-  val expandedPeer = viewModel.expandedMenuPeer.collectAsState()
-  val localClipboardManager = LocalClipboardManager.current
-  // Restrict search to devices running API 33+ (see https://github.com/tailscale/corp/issues/27375)
-  val enableSearch = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-  Column(modifier = Modifier.fillMaxSize()) {
-    if (enableSearch && FeatureFlags.isEnabled("enable_new_search")) {
-      Search(onSearchBarClick)
-    } else {
-      if (!isAndroidTV()) {
-        Box(
-            modifier =
-                Modifier.fillMaxWidth().background(color = MaterialTheme.colorScheme.surface)) {
-              OutlinedTextField(
-                  modifier =
-                      Modifier.fillMaxWidth()
-                          .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 0.dp)
-                          .onFocusChanged { isSearchFocussed = it.isFocused },
-                  singleLine = true,
-                  shape = MaterialTheme.shapes.extraLarge,
-                  colors = MaterialTheme.colorScheme.searchBarColors,
-                  leadingIcon = {
-                    Icon(imageVector = Icons.Outlined.Search, contentDescription = "search")
-                  },
-                  trailingIcon = {
-                    if (isSearchFocussed) {
-                      IconButton(
-                          onClick = {
-                            focusManager.clearFocus()
-                            onSearch("")
-                          }) {
-                            Icon(
-                                imageVector =
-                                    if (searchTermStr.isEmpty()) Icons.Outlined.Close
-                                    else Icons.Outlined.Clear,
-                                contentDescription = "clear search",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                          }
-                    }
-                  },
-                  placeholder = {
-                    Text(
-                        text = stringResource(id = R.string.search),
-                        style = MaterialTheme.typography.bodyLarge,
-                        maxLines = 1)
-                  },
-                  value = searchTermStr,
-                  onValueChange = { onSearch(it) })
-            }
-      }
-    }
-    // Peers display
-    LazyColumn(
-        modifier =
-            Modifier.fillMaxWidth()
-                .weight(1f) // LazyColumn gets the remaining vertical space
-                .onFocusChanged { isListFocussed = it.isFocused }
-                .background(color = MaterialTheme.colorScheme.surface)) {
-          // Handle case when no results are found
-          if (showNoResults) {
-            item {
-              Spacer(
-                  Modifier.height(16.dp)
-                      .fillMaxSize()
-                      .focusable(false)
-                      .background(color = MaterialTheme.colorScheme.surface))
-              Lists.LargeTitle(
-                  stringResource(id = R.string.no_results),
-                  bottomPadding = 8.dp,
-                  style = MaterialTheme.typography.bodyMedium,
-                  fontWeight = FontWeight.Light)
-            }
-          }
-          // Iterate over peer sets to display them
-          var first = true
-          peerList.forEach { peerSet ->
-            if (!first) {
-              item(key = "user_divider_${peerSet.user?.ID ?: 0L}") { Lists.ItemDivider() }
-            }
-            first = false
-            if (isAndroidTV()) {
-              item { NodesSectionHeader(peerSet = peerSet) }
-            } else {
-              stickyHeader { NodesSectionHeader(peerSet = peerSet) }
-            }
-            itemsWithDividers(peerSet.peers, key = { it.StableID }) { peer ->
-              ListItem(
-                  modifier =
-                      Modifier.combinedClickable(
-                          onClick = { onNavigateToPeerDetails(peer) },
-                          onLongClick = { viewModel.expandedMenuPeer.set(peer) }),
-                  colors = MaterialTheme.colorScheme.listItem,
-                  headlineContent = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                      Box(
-                          modifier =
-                              Modifier.padding(top = 2.dp)
-                                  .size(10.dp)
-                                  .background(
-                                      color = peer.connectedColor(netmap.value),
-                                      shape = RoundedCornerShape(percent = 50))) {}
-                      Spacer(modifier = Modifier.size(8.dp))
-                      Text(text = peer.displayName, style = MaterialTheme.typography.titleMedium)
-                      DropdownMenu(
-                          expanded = expandedPeer.value?.StableID == peer.StableID,
-                          onDismissRequest = { viewModel.hidePeerDropdownMenu() }) {
-                            DropdownMenuItem(
-                                leadingIcon = {
-                                  Icon(
-                                      painter = painterResource(R.drawable.clipboard),
-                                      contentDescription = null)
-                                },
-                                text = { Text(text = stringResource(R.string.copy_ip_address)) },
-                                onClick = {
-                                  viewModel.copyIpAddress(peer, localClipboardManager)
-                                  viewModel.hidePeerDropdownMenu()
-                                })
-                            netmap.value?.let { netMap ->
-                              if (!peer.isSelfNode(netMap)) {
-                                DropdownMenuItem(
-                                    leadingIcon = {
-                                      Icon(
-                                          painter = painterResource(R.drawable.timer),
-                                          contentDescription = null)
-                                    },
-                                    text = { Text(text = stringResource(R.string.ping)) },
-                                    onClick = {
-                                      viewModel.hidePeerDropdownMenu()
-                                      viewModel.startPing(peer)
-                                    })
-                              }
+    val peerList by viewModel.peers.collectAsState(initial = emptyList<PeerSet>())
+    val searchTermStr by viewModel.searchTerm.collectAsState(initial = "")
+    val showNoResults =
+        remember { derivedStateOf { searchTermStr.isNotEmpty() && peerList.isEmpty() } }.value
+    val netmap = viewModel.netmap.collectAsState()
+    val focusManager = LocalFocusManager.current
+    var isSearchFocussed by remember { mutableStateOf(false) }
+    var isListFocussed by remember { mutableStateOf(false) }
+    val expandedPeer = viewModel.expandedMenuPeer.collectAsState()
+    val localClipboardManager = LocalClipboardManager.current
+    // Restrict search to devices running API 33+ (see https://github.com/tailscale/corp/issues/27375)
+    val enableSearch = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (enableSearch && FeatureFlags.isEnabled("enable_new_search")) {
+            Search(onSearchBarClick)
+        } else {
+            if (!isAndroidTV()) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxWidth().background(color = MaterialTheme.colorScheme.surface),
+                ) {
+                    OutlinedTextField(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 0.dp)
+                                .onFocusChanged { isSearchFocussed = it.isFocused },
+                        singleLine = true,
+                        shape = MaterialTheme.shapes.extraLarge,
+                        colors = MaterialTheme.colorScheme.searchBarColors,
+                        leadingIcon = {
+                            Icon(imageVector = Icons.Outlined.Search, contentDescription = "search")
+                        },
+                        trailingIcon = {
+                            if (isSearchFocussed) {
+                                IconButton(onClick = {
+                                    focusManager.clearFocus()
+                                    onSearch("")
+                                }) {
+                                    Icon(
+                                        imageVector =
+                                            if (searchTermStr.isEmpty()) {
+                                                Icons.Outlined.Close
+                                            } else {
+                                                Icons.Outlined.Clear
+                                            },
+                                        contentDescription = "clear search",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
-                          }
-                    }
-                  },
-                  supportingContent = {
-                    Text(
-                        text = peer.Addresses?.first()?.split("/")?.first() ?: "",
-                        style =
-                            MaterialTheme.typography.bodyMedium.copy(
-                                lineHeight = MaterialTheme.typography.titleMedium.lineHeight))
-                  })
+                        },
+                        placeholder = {
+                            Text(
+                                text = stringResource(id = R.string.search),
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                            )
+                        },
+                        value = searchTermStr,
+                        onValueChange = { onSearch(it) },
+                    )
+                }
             }
-          }
+        }
+        // Peers display
+        LazyColumn(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f) // LazyColumn gets the remaining vertical space
+                    .onFocusChanged { isListFocussed = it.isFocused }
+                    .background(color = MaterialTheme.colorScheme.surface),
+        ) {
+            // Handle case when no results are found
+            if (showNoResults) {
+                item {
+                    Spacer(
+                        Modifier
+                            .height(16.dp)
+                            .fillMaxSize()
+                            .focusable(false)
+                            .background(color = MaterialTheme.colorScheme.surface),
+                    )
+                    Lists.LargeTitle(
+                        stringResource(id = R.string.no_results),
+                        bottomPadding = 8.dp,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Light,
+                    )
+                }
+            }
+            // Iterate over peer sets to display them
+            var first = true
+            peerList.forEach { peerSet ->
+                if (!first) {
+                    item(key = "user_divider_${peerSet.user?.ID ?: 0L}") { Lists.ItemDivider() }
+                }
+                first = false
+                if (isAndroidTV()) {
+                    item { NodesSectionHeader(peerSet = peerSet) }
+                } else {
+                    stickyHeader { NodesSectionHeader(peerSet = peerSet) }
+                }
+                itemsWithDividers(peerSet.peers, key = { it.StableID }) { peer ->
+                    ListItem(
+                        modifier =
+                            Modifier.combinedClickable(
+                                onClick = { onNavigateToPeerDetails(peer) },
+                                onLongClick = { viewModel.expandedMenuPeer.set(peer) },
+                            ),
+                        colors = MaterialTheme.colorScheme.listItem,
+                        headlineContent = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                // Left side: connection status and peer name
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier =
+                                            Modifier
+                                                .padding(top = 2.dp)
+                                                .size(10.dp)
+                                                .background(
+                                                    color = peer.connectedColor(netmap.value),
+                                                    shape = RoundedCornerShape(percent = 50),
+                                                ),
+                                    ) {}
+                                    Spacer(modifier = Modifier.size(8.dp))
+                                    Text(text = peer.displayName, style = MaterialTheme.typography.titleMedium)
+                                }
+
+                                // AWG status indicator
+                                val awgStatus by viewModel.awgPeersStatus.collectAsState()
+                                val awgSyncInProgress by viewModel.awgSyncInProgress.collectAsState()
+                                val localAwgStatus by viewModel.localAwgStatus.collectAsState()
+                                val peerHostname = peer.ComputedName ?: peer.Name
+
+                                // Check if this is self node
+                                val isSelfNode = netmap.value?.let { peer.isSelfNode(it) } ?: false
+                                val hasAwgConfig =
+                                    if (isSelfNode) {
+                                        localAwgStatus // Use local AWG status for self node
+                                    } else {
+                                        awgStatus[peerHostname] == true // Use peer AWG status for other nodes
+                                    }
+
+                                if (hasAwgConfig) {
+                                    Spacer(modifier = Modifier.size(2.dp))
+                                    Text(
+                                        text = "★",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = Color(0xFFFFD700), // Gold color
+                                    )
+
+                                    // Only show sync button for peer nodes (not self node)
+                                    if (!isSelfNode) {
+                                        // AWG sync button
+                                        Spacer(modifier = Modifier.size(2.dp))
+                                        Button(
+                                            onClick = {
+                                                viewModel.syncAwgConfigFromPeer(peerHostname)
+                                            },
+                                            enabled = awgSyncInProgress != peerHostname,
+                                            modifier = Modifier.height(28.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp), // Reduced padding
+                                        ) {
+                                            if (awgSyncInProgress == peerHostname) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(16.dp),
+                                                    strokeWidth = 2.dp,
+                                                )
+                                            } else {
+                                                Text(
+                                                    text = "Sync",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                DropdownMenu(
+                                    expanded = expandedPeer.value?.StableID == peer.StableID,
+                                    onDismissRequest = { viewModel.hidePeerDropdownMenu() },
+                                ) {
+                                    DropdownMenuItem(
+                                        leadingIcon = {
+                                            Icon(
+                                                painter = painterResource(R.drawable.clipboard),
+                                                contentDescription = null,
+                                            )
+                                        },
+                                        text = { Text(text = stringResource(R.string.copy_ip_address)) },
+                                        onClick = {
+                                            viewModel.copyIpAddress(peer, localClipboardManager)
+                                            viewModel.hidePeerDropdownMenu()
+                                        },
+                                    )
+                                    netmap.value?.let { netMap ->
+                                        if (!peer.isSelfNode(netMap)) {
+                                            DropdownMenuItem(
+                                                leadingIcon = {
+                                                    Icon(
+                                                        painter = painterResource(R.drawable.timer),
+                                                        contentDescription = null,
+                                                    )
+                                                },
+                                                text = { Text(text = stringResource(R.string.ping)) },
+                                                onClick = {
+                                                    viewModel.hidePeerDropdownMenu()
+                                                    viewModel.startPing(peer)
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        supportingContent = {
+                            Text(
+                                text =
+                                    peer.Addresses
+                                        ?.first()
+                                        ?.split("/")
+                                        ?.first() ?: "",
+                                style =
+                                    MaterialTheme.typography.bodyMedium.copy(lineHeight = MaterialTheme.typography.titleMedium.lineHeight),
+                            )
+                        },
+                    )
+                }
+            }
         }
   }
 }

@@ -377,4 +377,12 @@ help: ## Show this help
 	@grep -hE '^[0-9a-zA-Z_-]+:.*?## .*$$' ${MAKEFILE_LIST} | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[0;36m%-20s\033[m %s\n", $$1, $$2}'
 	@echo ""
 
+# Build and sign a release APK with self-generated keystore
+.PHONY: release-signed
+release-signed: libtailscale version gradle-dependencies ## Build a release APK signed with self-generated keystore
+	@echo "Building release APK with self-signing"
+	(cd android && ./gradlew assembleRelease)
+	install -C ./android/build/outputs/apk/release/android-release.apk tailscale-release-signed.apk
+	@echo "Release APK built and saved as tailscale-release-signed.apk"
+
 .DEFAULT_GOAL := help

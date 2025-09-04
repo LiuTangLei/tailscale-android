@@ -73,6 +73,16 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = "$compose_version"
     }
+    
+    signingConfigs {
+        release {
+            storeFile file('../my-release-key.keystore')
+            storePassword '123456'
+            keyAlias 'my-key-alias'
+            keyPassword '123456'
+        }
+    }
+    
     flavorDimensions "version"
     namespace 'com.tailscale.ipn'
 
@@ -97,10 +107,13 @@ android {
             proguardFiles getDefaultProguardFile(
                     'proguard-android-optimize.txt'),
                     'proguard-rules.pro'
+            
+            signingConfig signingConfigs.release
         }
         release_tv {
             initWith release
             manifestPlaceholders.leanbackRequired = true
+            signingConfig signingConfigs.release
         }
     }
 
