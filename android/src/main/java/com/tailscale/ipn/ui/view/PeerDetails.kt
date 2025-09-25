@@ -53,7 +53,8 @@ fun PeerDetails(
     model: PeerDetailsViewModel =
         viewModel(
             factory =
-                PeerDetailsViewModelFactory(nodeId, LocalContext.current.filesDir, pingViewModel))
+                PeerDetailsViewModelFactory(nodeId, LocalContext.current.filesDir, pingViewModel),
+        ),
 ) {
     val isPinging by model.isPinging.collectAsState()
     val awgConfig by model.awgConfig.collectAsState()
@@ -158,36 +159,44 @@ fun PeerDetails(
 }
 
 @Composable
-fun AddressRow(address: String, type: String) {
-  val localClipboardManager = LocalClipboardManager.current
+fun AddressRow(
+    address: String,
+    type: String,
+) {
+    val localClipboardManager = LocalClipboardManager.current
 
-  // Android TV doesn't have a clipboard, nor any way to use the values, so visible only.
-  val modifier =
-      if (isAndroidTV()) {
-        Modifier.focusable(false)
-      } else {
-        Modifier.clickable { localClipboardManager.setText(AnnotatedString(address)) }
-      }
-
-  ListItem(
-      modifier = modifier,
-      colors = MaterialTheme.colorScheme.listItem,
-      headlineContent = { Text(text = address) },
-      supportingContent = { Text(text = type) },
-      trailingContent = {
-        // TODO: there is some overlap with other uses of clipboard, DRY
-        if (!isAndroidTV()) {
-          Icon(painter = painterResource(id = R.drawable.clipboard), null)
+    // Android TV doesn't have a clipboard, nor any way to use the values, so visible only.
+    val modifier =
+        if (isAndroidTV()) {
+            Modifier.focusable(false)
+        } else {
+            Modifier.clickable { localClipboardManager.setText(AnnotatedString(address)) }
         }
-      })
+
+    ListItem(
+        modifier = modifier,
+        colors = MaterialTheme.colorScheme.listItem,
+        headlineContent = { Text(text = address) },
+        supportingContent = { Text(text = type) },
+        trailingContent = {
+            // TODO: there is some overlap with other uses of clipboard, DRY
+            if (!isAndroidTV()) {
+                Icon(painter = painterResource(id = R.drawable.clipboard), null)
+            }
+        },
+    )
 }
 
 @Composable
-fun ValueRow(title: String, value: String) {
-  ListItem(
-      colors = MaterialTheme.colorScheme.listItem,
-      headlineContent = { Text(text = title) },
-      supportingContent = { Text(text = value) })
+fun ValueRow(
+    title: String,
+    value: String,
+) {
+    ListItem(
+        colors = MaterialTheme.colorScheme.listItem,
+        headlineContent = { Text(text = title) },
+        supportingContent = { Text(text = value) },
+    )
 }
 
 private fun formatAwgConfig(config: com.tailscale.ipn.ui.model.AmneziaWGPrefs): String {
@@ -198,15 +207,49 @@ private fun formatAwgConfig(config: com.tailscale.ipn.ui.model.AmneziaWGPrefs): 
     config.JMax?.let { parts.add("JMax=$it") }
     config.S1?.let { parts.add("S1=$it") }
     config.S2?.let { parts.add("S2=$it") }
+    config.S3?.let { parts.add("S3=$it") }
+    config.S4?.let { parts.add("S4=$it") }
     config.I1?.let { if (it.isNotEmpty()) parts.add("I1=$it") }
     config.I2?.let { if (it.isNotEmpty()) parts.add("I2=$it") }
     config.I3?.let { if (it.isNotEmpty()) parts.add("I3=$it") }
     config.I4?.let { if (it.isNotEmpty()) parts.add("I4=$it") }
     config.I5?.let { if (it.isNotEmpty()) parts.add("I5=$it") }
-    config.H1?.let { parts.add("H1=$it") }
-    config.H2?.let { parts.add("H2=$it") }
-    config.H3?.let { parts.add("H3=$it") }
-    config.H4?.let { parts.add("H4=$it") }
+    config.H1?.let { range ->
+        if (range.hasValue()) {
+            if (range.isFixedValue()) {
+                parts.add("H1=${range.getFixedValue()}")
+            } else {
+                parts.add("H1=${range.min}-${range.max}")
+            }
+        }
+    }
+    config.H2?.let { range ->
+        if (range.hasValue()) {
+            if (range.isFixedValue()) {
+                parts.add("H2=${range.getFixedValue()}")
+            } else {
+                parts.add("H2=${range.min}-${range.max}")
+            }
+        }
+    }
+    config.H3?.let { range ->
+        if (range.hasValue()) {
+            if (range.isFixedValue()) {
+                parts.add("H3=${range.getFixedValue()}")
+            } else {
+                parts.add("H3=${range.min}-${range.max}")
+            }
+        }
+    }
+    config.H4?.let { range ->
+        if (range.hasValue()) {
+            if (range.isFixedValue()) {
+                parts.add("H4=${range.getFixedValue()}")
+            } else {
+                parts.add("H4=${range.min}-${range.max}")
+            }
+        }
+    }
 
     return if (parts.isEmpty()) {
         "Base Config"
