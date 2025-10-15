@@ -89,4 +89,4 @@ require (
 	gvisor.dev/gvisor v0.0.0-20250205023644-9414b50a5633 // indirect
 )
 
-replace tailscale.com => github.com/LiuTangLei/tailscale v1.88.3
+replace tailscale.com => github.com/LiuTangLei/tailscale v1.88.4
