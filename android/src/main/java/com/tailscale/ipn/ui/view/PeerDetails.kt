@@ -53,102 +53,207 @@ fun PeerDetails(
     model: PeerDetailsViewModel =
         viewModel(
             factory =
-                PeerDetailsViewModelFactory(nodeId, LocalContext.current.filesDir, pingViewModel))
+                PeerDetailsViewModelFactory(nodeId, LocalContext.current.filesDir, pingViewModel),
+        ),
 ) {
-  val isPinging by model.isPinging.collectAsState()
+    val isPinging by model.isPinging.collectAsState()
+    val awgConfig by model.awgConfig.collectAsState()
 
-  model.netmap.collectAsState().value?.let { netmap ->
-    model.node.collectAsState().value?.let { node ->
-      Scaffold(
-          topBar = {
-            Header(
-                title = {
-                  Column {
-                    Text(
-                        text = node.displayName,
-                        style = MaterialTheme.typography.titleMedium.short,
-                        color = MaterialTheme.colorScheme.onSurface)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                      Box(
-                          modifier =
-                              Modifier.size(8.dp)
-                                  .background(
-                                      color = node.connectedColor(netmap),
-                                      shape = RoundedCornerShape(percent = 50))) {}
-                      Spacer(modifier = Modifier.size(8.dp))
-                      Text(
-                          text = stringResource(id = node.connectedStrRes(netmap)),
-                          style = MaterialTheme.typography.bodyMedium.short,
-                          color = MaterialTheme.colorScheme.onSurfaceVariant)
+    model.netmap.collectAsState().value?.let { netmap ->
+        model.node.collectAsState().value?.let { node ->
+            Scaffold(
+                topBar = {
+                    Header(
+                        title = {
+                            Column {
+                                Text(
+                                    text = node.displayName,
+                                    style = MaterialTheme.typography.titleMedium.short,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier =
+                                            Modifier
+                                                .size(8.dp)
+                                                .background(
+                                                    color = node.connectedColor(netmap),
+                                                    shape = RoundedCornerShape(percent = 50),
+                                                ),
+                                    ) {}
+                                    Spacer(modifier = Modifier.size(8.dp))
+                                    Text(
+                                        text = stringResource(id = node.connectedStrRes(netmap)),
+                                        style = MaterialTheme.typography.bodyMedium.short,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = { model.startPing() }) {
+                                Icon(
+                                    painter = painterResource(R.drawable.timer),
+                                    contentDescription = "Ping device",
+                                )
+                            }
+                        },
+                        onBack = onNavigateBack,
+                    )
+                },
+            ) { innerPadding ->
+                LazyColumn(
+                    modifier = Modifier.padding(innerPadding),
+                ) {
+                    item(key = "tailscaleAddresses") {
+                        Lists.MutedHeader(stringResource(R.string.tailscale_addresses))
                     }
-                  }
-                },
-                actions = {
-                  IconButton(onClick = { model.startPing() }) {
-                    Icon(
-                        painter = painterResource(R.drawable.timer),
-                        contentDescription = "Ping device")
-                  }
-                },
-                onBack = onNavigateBack)
-          },
-      ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier.padding(innerPadding),
-        ) {
-          item(key = "tailscaleAddresses") {
-            Lists.MutedHeader(stringResource(R.string.tailscale_addresses))
-          }
 
-          itemsWithDividers(node.displayAddresses, key = { it.address }) {
-            AddressRow(address = it.address, type = it.typeString)
-          }
+                    itemsWithDividers(node.displayAddresses, key = { it.address }) {
+                        AddressRow(address = it.address, type = it.typeString)
+                    }
 
-          item(key = "infoDivider") { Lists.SectionDivider() }
+                    item(key = "infoDivider") { Lists.SectionDivider() }
 
-          itemsWithDividers(node.info, key = { "info_${it.titleRes}" }) {
-            ValueRow(title = stringResource(id = it.titleRes), value = it.value.getString())
-          }
+                    itemsWithDividers(node.info, key = { "info_${it.titleRes}" }) {
+                        ValueRow(title = stringResource(id = it.titleRes), value = it.value.getString())
+                    }
+
+                    // AWG Configuration section
+                    awgConfig?.let { config ->
+                        if (config.hasAwgConfig) {
+                            item(key = "awgDivider") { Lists.SectionDivider() }
+
+                            item(key = "awgHeader") {
+                                Lists.MutedHeader("AWG Config")
+                            }
+
+                            config.config?.let { awgPrefs ->
+                                item(key = "awgConfigString") {
+                                    ValueRow(
+                                        title = "Config Detail",
+                                        value = formatAwgConfig(awgPrefs),
+                                    )
+                                }
+                            }
+
+                            if (config.error != null) {
+                                item(key = "awgError") {
+                                    ValueRow(
+                                        title = "Config Error",
+                                        value = config.error,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                if (isPinging) {
+                    ModalBottomSheet(onDismissRequest = { model.onPingDismissal() }) {
+                        PingView(model = model.pingViewModel)
+                    }
+                }
+            }
         }
-        if (isPinging) {
-          ModalBottomSheet(onDismissRequest = { model.onPingDismissal() }) {
-            PingView(model = model.pingViewModel)
-          }
-        }
-      }
     }
-  }
 }
 
 @Composable
-fun AddressRow(address: String, type: String) {
-  val localClipboardManager = LocalClipboardManager.current
+fun AddressRow(
+    address: String,
+    type: String,
+) {
+    val localClipboardManager = LocalClipboardManager.current
 
-  // Android TV doesn't have a clipboard, nor any way to use the values, so visible only.
-  val modifier =
-      if (isAndroidTV()) {
-        Modifier.focusable(false)
-      } else {
-        Modifier.clickable { localClipboardManager.setText(AnnotatedString(address)) }
-      }
-
-  ListItem(
-      modifier = modifier,
-      colors = MaterialTheme.colorScheme.listItem,
-      headlineContent = { Text(text = address) },
-      supportingContent = { Text(text = type) },
-      trailingContent = {
-        // TODO: there is some overlap with other uses of clipboard, DRY
-        if (!isAndroidTV()) {
-          Icon(painter = painterResource(id = R.drawable.clipboard), null)
+    // Android TV doesn't have a clipboard, nor any way to use the values, so visible only.
+    val modifier =
+        if (isAndroidTV()) {
+            Modifier.focusable(false)
+        } else {
+            Modifier.clickable { localClipboardManager.setText(AnnotatedString(address)) }
         }
-      })
+
+    ListItem(
+        modifier = modifier,
+        colors = MaterialTheme.colorScheme.listItem,
+        headlineContent = { Text(text = address) },
+        supportingContent = { Text(text = type) },
+        trailingContent = {
+            // TODO: there is some overlap with other uses of clipboard, DRY
+            if (!isAndroidTV()) {
+                Icon(painter = painterResource(id = R.drawable.clipboard), null)
+            }
+        },
+    )
 }
 
 @Composable
-fun ValueRow(title: String, value: String) {
-  ListItem(
-      colors = MaterialTheme.colorScheme.listItem,
-      headlineContent = { Text(text = title) },
-      supportingContent = { Text(text = value) })
+fun ValueRow(
+    title: String,
+    value: String,
+) {
+    ListItem(
+        colors = MaterialTheme.colorScheme.listItem,
+        headlineContent = { Text(text = title) },
+        supportingContent = { Text(text = value) },
+    )
+}
+
+private fun formatAwgConfig(config: com.tailscale.ipn.ui.model.AmneziaWGPrefs): String {
+    val parts = mutableListOf<String>()
+
+    config.JC?.let { parts.add("JC=$it") }
+    config.JMin?.let { parts.add("JMin=$it") }
+    config.JMax?.let { parts.add("JMax=$it") }
+    config.S1?.let { parts.add("S1=$it") }
+    config.S2?.let { parts.add("S2=$it") }
+    config.S3?.let { parts.add("S3=$it") }
+    config.S4?.let { parts.add("S4=$it") }
+    config.I1?.let { if (it.isNotEmpty()) parts.add("I1=$it") }
+    config.I2?.let { if (it.isNotEmpty()) parts.add("I2=$it") }
+    config.I3?.let { if (it.isNotEmpty()) parts.add("I3=$it") }
+    config.I4?.let { if (it.isNotEmpty()) parts.add("I4=$it") }
+    config.I5?.let { if (it.isNotEmpty()) parts.add("I5=$it") }
+    config.H1?.let { range ->
+        if (range.hasValue()) {
+            if (range.isFixedValue()) {
+                parts.add("H1=${range.getFixedValue()}")
+            } else {
+                parts.add("H1=${range.min}-${range.max}")
+            }
+        }
+    }
+    config.H2?.let { range ->
+        if (range.hasValue()) {
+            if (range.isFixedValue()) {
+                parts.add("H2=${range.getFixedValue()}")
+            } else {
+                parts.add("H2=${range.min}-${range.max}")
+            }
+        }
+    }
+    config.H3?.let { range ->
+        if (range.hasValue()) {
+            if (range.isFixedValue()) {
+                parts.add("H3=${range.getFixedValue()}")
+            } else {
+                parts.add("H3=${range.min}-${range.max}")
+            }
+        }
+    }
+    config.H4?.let { range ->
+        if (range.hasValue()) {
+            if (range.isFixedValue()) {
+                parts.add("H4=${range.getFixedValue()}")
+            } else {
+                parts.add("H4=${range.min}-${range.max}")
+            }
+        }
+    }
+
+    return if (parts.isEmpty()) {
+        "Base Config"
+    } else {
+        parts.joinToString("\n")
+    }
 }
