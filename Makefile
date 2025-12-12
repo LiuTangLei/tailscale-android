@@ -152,7 +152,7 @@ tailscale-test.apk: version gradle-dependencies
 	install -C ./android/build/outputs/apk/androidTest/applicationTest/android-applicationTest-androidTest.apk $@
 
 tailscale.version: go.mod go.sum $(wildcard .git/HEAD)
-	@bash -c "./tool/go run tailscale.com/cmd/mkversion > tailscale.version"
+	@bash -c "./tool/go run -mod=mod tailscale.com/cmd/mkversion > tailscale.version"
 
 .PHONY: version
 version: tailscale.version
@@ -169,10 +169,10 @@ $(GOBIN):
 	mkdir -p $(GOBIN)
 
 $(GOBIN)/gomobile: $(GOBIN)/gobind go.mod go.sum | $(GOBIN)
-	./tool/go install golang.org/x/mobile/cmd/gomobile
+	./tool/go install -mod=mod golang.org/x/mobile/cmd/gomobile
 
 $(GOBIN)/gobind: go.mod go.sum
-	./tool/go install golang.org/x/mobile/cmd/gobind
+	./tool/go install -mod=mod golang.org/x/mobile/cmd/gobind
 
 .PHONY: build-unstripped-aar
 build-unstripped-aar: tailscale.version $(GOBIN)/gomobile
@@ -182,7 +182,7 @@ build-unstripped-aar: tailscale.version $(GOBIN)/gomobile
 	rm -f $(ABS_UNSTRIPPED_AAR)
 	# The -linkmode=external -extldflags=-Wl,-z,max-page-size=16384 is specific to NDK 23
 	# to support 16kb page sizes.  Your mileage may vary with other NDK versions.
-	$(GOBIN)/gomobile bind -target android -androidapi 26 \
+	GOFLAGS='-mod=mod' $(GOBIN)/gomobile bind -target android -androidapi 26 \
 		-tags "$$(./build-tags.sh)" \
 		-ldflags "-linkmode=external -extldflags=-Wl,-z,max-page-size=16384 $$(./version-ldflags.sh)" \
 		-o $(ABS_UNSTRIPPED_AAR) ./libtailscale || { echo "gomobile bind failed"; exit 1; }
