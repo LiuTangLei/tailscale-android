@@ -3,8 +3,8 @@ module github.com/tailscale/tailscale-android
 go 1.25.5
 
 require (
-	github.com/tailscale/wireguard-go v0.0.0-20250716170648-1d0488a3d7da
-	golang.org/x/mobile v0.0.0-20240806205939-81131f6468ab
+	github.com/LiuTangLei/wireguard-go v0.0.19
+	golang.org/x/mobile v0.0.0-20251021151156-188f512ec823
 	tailscale.com v1.92.2
 )
 
@@ -68,9 +68,11 @@ require (
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc // indirect
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976 // indirect
 	github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e // indirect
+	github.com/tevino/abool v1.2.0 // indirect
 	github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/crypto v0.45.0 // indirect
@@ -87,3 +89,5 @@ require (
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	gvisor.dev/gvisor v0.0.0-20250205023644-9414b50a5633 // indirect
 )
+
+replace tailscale.com => github.com/LiuTangLei/tailscale v1.90.6
