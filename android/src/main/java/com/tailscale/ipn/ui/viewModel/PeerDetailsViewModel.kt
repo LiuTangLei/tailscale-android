@@ -13,10 +13,10 @@ import com.tailscale.ipn.ui.model.Tailcfg
 import com.tailscale.ipn.ui.notifier.Notifier
 import com.tailscale.ipn.ui.util.ComposableStringFormatter
 import com.tailscale.ipn.ui.util.set
+import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import java.io.File
 
 data class PeerSettingInfo(val titleRes: Int, val value: ComposableStringFormatter)
 
@@ -39,37 +39,36 @@ class PeerDetailsViewModel(
   val node: StateFlow<Tailcfg.Node?> = MutableStateFlow(null)
   val isPinging: StateFlow<Boolean> = MutableStateFlow(false)
 
-    // AWG configuration for this peer
-    private val _awgConfig = MutableStateFlow<AwgPeerResult?>(null)
-    val awgConfig: StateFlow<AwgPeerResult?> = _awgConfig
+  // AWG configuration for this peer
+  private val _awgConfig = MutableStateFlow<AwgPeerResult?>(null)
+  val awgConfig: StateFlow<AwgPeerResult?> = _awgConfig
+  private fun loadAwgConfigForPeer(peer: Tailcfg.Node) {
+      val client = Client(viewModelScope)
+      client.awgSyncPeers { result ->
+          result.onSuccess { awgPeers ->
+              // Find AWG config for this peer by hostname
+              val peerHostname = peer.ComputedName ?: peer.Name
+              val awgPeer = awgPeers.find { it.hostname == peerHostname }
+              _awgConfig.value = awgPeer
+          }.onFailure {
+              // If AWG sync peers fails, just set null
+              _awgConfig.value = null
+          }
+      }
+  }
 
-    init {
-        viewModelScope.launch {
-            Notifier.netmap.collect { nm ->
-                netmap.set(nm)
-                nm?.getPeer(nodeId)?.let { peer ->
-                    node.set(peer)
-                    // Load AWG config when node is available
-                    loadAwgConfigForPeer(peer)
-                }
-            }
+  init {
+    viewModelScope.launch {
+      Notifier.netmap.collect { nm ->
+        netmap.set(nm)
+        nm?.getPeer(nodeId)?.let { peer ->
+          node.set(peer)
+          // Load AWG config when node is available
+          loadAwgConfigForPeer(peer)
         }
+      }
     }
-
-    private fun loadAwgConfigForPeer(peer: Tailcfg.Node) {
-        val client = Client(viewModelScope)
-        client.awgSyncPeers { result ->
-            result.onSuccess { awgPeers ->
-                // Find AWG config for this peer by hostname
-                val peerHostname = peer.ComputedName ?: peer.Name
-                val awgPeer = awgPeers.find { it.hostname == peerHostname }
-                _awgConfig.value = awgPeer
-            }.onFailure {
-                // If AWG sync peers fails, just set null
-                _awgConfig.value = null
-            }
-        }
-    }
+  }
 
   fun startPing() {
     isPinging.set(true)

@@ -1,6 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 package com.tailscale.ipn.ui.viewModel
+
 import android.content.Intent
 import android.net.Uri
 import android.net.VpnService
@@ -121,15 +122,19 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
   fun updateSearchTerm(term: String) {
     _searchTerm.value = term
   }
+
   fun hidePeerDropdownMenu() {
     expandedMenuPeer.set(null)
   }
+
   fun copyIpAddress(peer: Tailcfg.Node, clipboardManager: ClipboardManager) {
     clipboardManager.setText(AnnotatedString(peer.primaryIPv4Address ?: ""))
   }
+
   fun startPing(peer: Tailcfg.Node) {
     this.pingViewModel.startPing(peer)
   }
+
   fun onPingDismissal() {
     this.pingViewModel.handleDismissal()
   }
@@ -140,7 +145,9 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     val v = MDMSettings.authKey.flow.value.value
     return v != null && v != ""
   }
+
   private val peerCategorizer = PeerCategorizer()
+
   init {
     viewModelScope.launch {
       var previousState: State? = null
@@ -207,9 +214,11 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
       App.get().healthNotifier?.currentIcon?.collect { icon -> healthIcon.set(icon) }
     }
   }
+
   fun maybeRequestVpnPermission() {
     _requestVpnPermission.value = true
   }
+
   fun showVPNPermissionLauncherIfUnauthorized() {
     val vpnIntent = VpnService.prepare(App.get())
     TSLog.d("VpnPermissions", "vpnIntent=$vpnIntent")
@@ -249,12 +258,15 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
       }
     }
   }
+
   fun searchPeers(searchTerm: String) {
     this.searchTerm.set(searchTerm)
   }
+
   fun enableSearchAutoFocus() {
     autoFocusSearch = true
   }
+
   fun disableSearchAutoFocus() {
     autoFocusSearch = false
   }
