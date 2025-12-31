@@ -96,7 +96,7 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
   // Icon displayed in the button to present the health view
   val healthIcon: StateFlow<Int?> = MutableStateFlow(null)
 
-    // AWG peers status - nodeKey to hasAwgConfig mapping
+    // AWG peers status - normalized peer key to hasAwgConfig mapping
     private val _awgPeersStatus = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val awgPeersStatus: StateFlow<Map<String, Boolean>> = _awgPeersStatus
 
@@ -104,7 +104,7 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     private val _awgStatusMessage = MutableStateFlow<String?>(null)
     val awgStatusMessage: StateFlow<String?> = _awgStatusMessage
 
-    // AWG peers data - hostname to full peer data mapping
+    // AWG peers data - normalized peer key to full peer data mapping
     private val _awgPeersData = MutableStateFlow<Map<String, AwgPeerResult>>(emptyMap())
     val awgPeersData: StateFlow<Map<String, AwgPeerResult>> = _awgPeersData
 
@@ -118,6 +118,22 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     // Local machine AWG configuration status
     private val _localAwgStatus = MutableStateFlow<Boolean>(false)
     val localAwgStatus: StateFlow<Boolean> = _localAwgStatus
+
+    private fun normalizePeerKey(value: String): String {
+      return value.trim().trimEnd('.').substringBefore('.').lowercase()
+    }
+
+    private fun peerKeyCandidates(value: String): List<String> {
+      val trimmed = value.trim().trimEnd('.')
+      val short = trimmed.substringBefore('.')
+      return listOf(
+          trimmed,
+          trimmed.lowercase(),
+          short,
+          short.lowercase(),
+          normalizePeerKey(trimmed),
+      ).distinct()
+    }
 
   fun updateSearchTerm(term: String) {
     _searchTerm.value = term
@@ -299,12 +315,17 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
                         )
                     }
 
-                    // Convert list to map for easier lookup, using hostname instead of nodeKey
-                    val statusMap: Map<String, Boolean> = awgPeers.associate { it.hostname to it.hasAwgConfig }
+                    // Index peers by a normalized key so UI lookups work with Hostinfo.Hostname,
+                    // ComputedName, or FQDNs (case-insensitive, domain-stripped).
+                    val statusMap = mutableMapOf<String, Boolean>()
+                    val peerDataMap = mutableMapOf<String, AwgPeerResult>()
+                    awgPeers.forEach { peer ->
+                      peerKeyCandidates(peer.hostname).forEach { key ->
+                        statusMap[key] = peer.hasAwgConfig
+                        peerDataMap.putIfAbsent(key, peer)
+                      }
+                    }
                     _awgPeersStatus.value = statusMap
-
-                    // Also save the full peer data for detailed view and sync operations
-                    val peerDataMap: Map<String, AwgPeerResult> = awgPeers.associateBy { it.hostname }
                     _awgPeersData.value = peerDataMap
 
                     // Show toast with AWG peers count, using computed property
@@ -359,7 +380,7 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
         hostname: String,
         timeout: Int = 10,
     ) {
-        val peerData = _awgPeersData.value[hostname]
+      val peerData = peerKeyCandidates(hostname).firstNotNullOfOrNull { key -> _awgPeersData.value[key] }
         if (peerData == null) {
             _awgStatusMessage.value = "Peer $hostname AWG config info not found"
             return
@@ -372,15 +393,16 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
 
         // Find the full nodeKey from netmap since AWG API returns truncated nodeKey
         val netmap = Notifier.netmap.value
+        val targetKey = normalizePeerKey(hostname)
         val fullNodeKey =
-            netmap?.let { nm ->
-                // Find the peer by hostname and get its full nodeKey
-                val allNodes = listOfNotNull(nm.SelfNode) + (nm.Peers ?: emptyList())
-                allNodes
-                    .find { node ->
-                        node.ComputedName == hostname || node.Name == hostname
-                    }?.Key
-            }
+          netmap?.let { nm ->
+            val allNodes = listOfNotNull(nm.SelfNode) + (nm.Peers ?: emptyList())
+            allNodes
+              .find { node ->
+                val nodeKey = normalizePeerKey(node.Hostinfo.Hostname ?: node.ComputedName ?: node.Name)
+                nodeKey == targetKey
+              }?.Key
+          }
 
         if (fullNodeKey.isNullOrEmpty()) {
             _awgStatusMessage.value = "Cannot find full nodeKey for peer $hostname"

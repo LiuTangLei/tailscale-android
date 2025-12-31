@@ -19,8 +19,8 @@ github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c/go.mod h1:ukJfTF
 github.com/Djarvur/go-err113 v0.1.0/go.mod h1:4UJr5HIiMZrwgkSPdsjy2uOQExX/WEILpIrO9UPGuXs=
 github.com/GaijinEntertainment/go-exhaustruct/v3 v3.2.0/go.mod h1:Nl76DrGNJTA1KJ0LePKBw/vznBX1EHbAZX8mwjR82nI=
 github.com/Kodeworks/golang-image-ico v0.0.0-20141118225523-73f0f4cfade9/go.mod h1:7uhhqiBaR4CpN0k9rMjOtjpcfGd6DG2m04zQxKnWQ0I=
-github.com/LiuTangLei/tailscale v1.92.2 h1:DbCJSQAhJi51RaAkxVh+SdXknfvBfG2h1A4rwNhmZy8=
-github.com/LiuTangLei/tailscale v1.92.2/go.mod h1:onxQ6plHiMT9aENFWR/LHj5BhilJTIz3OtUWUO8oy+8=
+github.com/LiuTangLei/tailscale v1.92.3 h1:zi4gaF4HD2R4JWEk6qULLYc5v7FuAFsZ0NP794Ly2xw=
+github.com/LiuTangLei/tailscale v1.92.3/go.mod h1:onxQ6plHiMT9aENFWR/LHj5BhilJTIz3OtUWUO8oy+8=
 github.com/LiuTangLei/wireguard-go v0.0.19 h1:c68w2onO1eEtwl/hMsjHYOdbTh7uFio7sttY07NDHsE=
 github.com/LiuTangLei/wireguard-go v0.0.19/go.mod h1:B97Kech6uisykxbDUyZd8wD1pGu/VUxnPymfSiznrO8=
 github.com/Masterminds/goutils v1.1.1/go.mod h1:8cTjp+g8YejhMuvIA5y2vz3BpJxksy863GQaJW2MFNU=

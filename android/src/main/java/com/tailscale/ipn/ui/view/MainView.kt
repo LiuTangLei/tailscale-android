@@ -677,7 +677,8 @@ fun PeerList(
                       val awgStatus by viewModel.awgPeersStatus.collectAsState()
                       val awgSyncInProgress by viewModel.awgSyncInProgress.collectAsState()
                       val localAwgStatus by viewModel.localAwgStatus.collectAsState()
-                      val peerHostname = peer.ComputedName ?: peer.Name
+                      val peerHostname = peer.Hostinfo.Hostname ?: peer.ComputedName ?: peer.Name
+                      val peerAwgKey = peerHostname.trim().substringBefore('.').lowercase()
 
                       // Check if this is self node
                       val isSelfNode = netmap.value?.let { peer.isSelfNode(it) } ?: false
@@ -685,7 +686,7 @@ fun PeerList(
                           if (isSelfNode) {
                               localAwgStatus // Use local AWG status for self node
                           } else {
-                              awgStatus[peerHostname] == true // Use peer AWG status for other nodes
+                            awgStatus[peerAwgKey] == true // Use peer AWG status for other nodes
                           }
 
                       if (hasAwgConfig) {
