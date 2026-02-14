@@ -5,11 +5,15 @@ package com.tailscale.ipn.ui.localapi
 
 import android.content.Context
 import com.tailscale.ipn.App
+import com.tailscale.ipn.ui.model.AmneziaWGPrefs
+import com.tailscale.ipn.ui.model.AwgPeerResult
+import com.tailscale.ipn.ui.model.AwgSyncApplyRequest
 import com.tailscale.ipn.ui.model.BugReportID
 import com.tailscale.ipn.ui.model.Errors
 import com.tailscale.ipn.ui.model.Ipn
 import com.tailscale.ipn.ui.model.IpnLocal
 import com.tailscale.ipn.ui.model.IpnState
+import com.tailscale.ipn.ui.model.LocalPrefs
 import com.tailscale.ipn.ui.model.StableNodeID
 import com.tailscale.ipn.ui.model.Tailcfg
 import com.tailscale.ipn.ui.util.InputStreamAdapter
@@ -49,6 +53,9 @@ private object Endpoint {
   const val FILE_PUT = "file-put"
   const val TAILFS_SERVER_ADDRESS = "tailfs/fileserver-address"
   const val ENABLE_EXIT_NODE = "set-use-exit-node-enabled"
+  const val DISABLE_EXIT_NODE = "set-use-exit-node-disabled"
+  const val AWG_SYNC_PEERS = "awg-sync-peers"
+  const val AWG_SYNC_APPLY = "awg-sync-apply"
 }
 
 typealias StatusResponseHandler = (Result<IpnState.Status>) -> Unit
@@ -154,6 +161,80 @@ class Client(private val scope: CoroutineScope) {
   fun tailnetLockStatus(responseHandler: TailnetLockStatusResponseHandler) {
     get(Endpoint.TKA_STATUS, responseHandler = responseHandler)
   }
+
+    fun awgSyncPeers(responseHandler: (Result<List<AwgPeerResult>>) -> Unit) {
+        TSLog.d("Client", "Making AWG sync peers request to: ${Endpoint.AWG_SYNC_PEERS}")
+        val debugHandler: (Result<List<AwgPeerResult>>) -> Unit = { result ->
+            when {
+                result.isSuccess -> {
+                    TSLog.d("Client", "AWG sync peers succeeded with ${result.getOrNull()?.size} results")
+                }
+                result.isFailure -> {
+                    TSLog.e("Client", "AWG sync peers failed: ${result.exceptionOrNull()?.message}")
+                }
+            }
+            responseHandler(result)
+        }
+        get(Endpoint.AWG_SYNC_PEERS, responseHandler = debugHandler)
+    }
+
+    fun getLocalPrefs(responseHandler: (Result<LocalPrefs>) -> Unit) {
+        TSLog.d("Client", "Getting local prefs for AWG configuration")
+        val debugHandler: (Result<LocalPrefs>) -> Unit = { result ->
+            when {
+                result.isSuccess -> {
+                    val prefs = result.getOrNull()
+                    TSLog.d("Client", "Local prefs retrieved successfully")
+                    if (prefs?.AmneziaWG != null) {
+                        TSLog.d("Client", "Local AWG config found: hasNonDefaultValues=${prefs.AmneziaWG.hasNonDefaultValues()}")
+                    } else {
+                        TSLog.d("Client", "No local AWG config found")
+                    }
+                }
+                result.isFailure -> {
+                    TSLog.e("Client", "Get local prefs failed: ${result.exceptionOrNull()?.message}")
+                }
+            }
+            responseHandler(result)
+        }
+        get(Endpoint.PREFS, responseHandler = debugHandler)
+    }
+
+    fun awgSyncApply(
+        nodeKey: String,
+        timeout: Int = 10,
+        responseHandler: (Result<AmneziaWGPrefs>) -> Unit,
+    ) {
+        TSLog.d("Client", "Making AWG sync apply request for nodeKey: $nodeKey, timeout: $timeout")
+        val validTimeout =
+            when {
+                timeout <= 0 -> 10
+                timeout > 60 -> 60
+                else -> timeout
+            }
+        val request = AwgSyncApplyRequest(nodeKey = nodeKey, timeout = validTimeout)
+        val requestBody = Request.jsonEncoder.encodeToString(request).toByteArray()
+        val jsonString = Request.jsonEncoder.encodeToString(request)
+        TSLog.d("Client", "AWG sync apply JSON request: $jsonString")
+        if (!nodeKey.startsWith("nodekey:")) {
+            TSLog.w("Client", "Warning: nodeKey does not start with 'nodekey:' prefix")
+        }
+        val debugHandler: (Result<AmneziaWGPrefs>) -> Unit = { result ->
+            when {
+                result.isSuccess -> {
+                    TSLog.d("Client", "AWG sync apply succeeded: ${result.getOrNull()}")
+                }
+                result.isFailure -> {
+                    TSLog.e("Client", "AWG sync apply failed: ${result.exceptionOrNull()?.message}")
+                    result.exceptionOrNull()?.let { exception ->
+                        TSLog.e("Client", "Full exception details", exception)
+                    }
+                }
+            }
+            responseHandler(result)
+        }
+        post(Endpoint.AWG_SYNC_APPLY, requestBody, responseHandler = debugHandler)
+    }
 
   fun fileTargets(responseHandler: (Result<List<Ipn.FileTarget>>) -> Unit) {
     get(Endpoint.FILE_TARGETS, responseHandler = responseHandler)
@@ -306,7 +387,17 @@ class Request<T>(
   companion object {
     private const val TAG = "LocalAPIRequest"
 
-    private val jsonDecoder = Json { ignoreUnknownKeys = true }
+    private val jsonDecoder =
+        Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+        }
+    internal val jsonEncoder =
+        Json {
+            ignoreUnknownKeys = true
+            prettyPrint = false
+            useAlternativeNames = false
+         }
 
     private lateinit var app: libtailscale.Application
 

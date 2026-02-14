@@ -56,6 +56,7 @@ fun PeerDetails(
                 PeerDetailsViewModelFactory(nodeId, LocalContext.current.filesDir, pingViewModel))
 ) {
   val isPinging by model.isPinging.collectAsState()
+  val awgConfig by model.awgConfig.collectAsState()
 
   model.netmap.collectAsState().value?.let { netmap ->
     model.node.collectAsState().value?.let { node ->
@@ -109,6 +110,34 @@ fun PeerDetails(
           itemsWithDividers(node.info, key = { "info_${it.titleRes}" }) {
             ValueRow(title = stringResource(id = it.titleRes), value = it.value.getString())
           }
+                    // AWG Configuration section
+                    awgConfig?.let { config ->
+                        if (config.hasAwgConfig) {
+                            item(key = "awgDivider") { Lists.SectionDivider() }
+
+                            item(key = "awgHeader") {
+                                Lists.MutedHeader("AWG Config")
+                            }
+
+                            config.config?.let { awgPrefs ->
+                                item(key = "awgConfigString") {
+                                    ValueRow(
+                                        title = "Config Detail",
+                                        value = formatAwgConfig(awgPrefs),
+                                    )
+                                }
+                            }
+
+                            if (config.error != null) {
+                                item(key = "awgError") {
+                                    ValueRow(
+                                        title = "Config Error",
+                                        value = config.error,
+                                    )
+                                }
+                            }
+                        }
+                    }
         }
         if (isPinging) {
           ModalBottomSheet(onDismissRequest = { model.onPingDismissal() }) {
@@ -151,4 +180,63 @@ fun ValueRow(title: String, value: String) {
       colors = MaterialTheme.colorScheme.listItem,
       headlineContent = { Text(text = title) },
       supportingContent = { Text(text = value) })
+}
+
+private fun formatAwgConfig(config: com.tailscale.ipn.ui.model.AmneziaWGPrefs): String {
+    val parts = mutableListOf<String>()
+
+    config.JC?.let { parts.add("JC=$it") }
+    config.JMin?.let { parts.add("JMin=$it") }
+    config.JMax?.let { parts.add("JMax=$it") }
+    config.S1?.let { parts.add("S1=$it") }
+    config.S2?.let { parts.add("S2=$it") }
+    config.S3?.let { parts.add("S3=$it") }
+    config.S4?.let { parts.add("S4=$it") }
+    config.I1?.let { if (it.isNotEmpty()) parts.add("I1=$it") }
+    config.I2?.let { if (it.isNotEmpty()) parts.add("I2=$it") }
+    config.I3?.let { if (it.isNotEmpty()) parts.add("I3=$it") }
+    config.I4?.let { if (it.isNotEmpty()) parts.add("I4=$it") }
+    config.I5?.let { if (it.isNotEmpty()) parts.add("I5=$it") }
+    config.H1?.let { range ->
+        if (range.hasValue()) {
+            if (range.isFixedValue()) {
+                parts.add("H1=${range.getFixedValue()}")
+            } else {
+                parts.add("H1=${range.min}-${range.max}")
+            }
+        }
+    }
+    config.H2?.let { range ->
+        if (range.hasValue()) {
+            if (range.isFixedValue()) {
+                parts.add("H2=${range.getFixedValue()}")
+            } else {
+                parts.add("H2=${range.min}-${range.max}")
+            }
+        }
+    }
+    config.H3?.let { range ->
+        if (range.hasValue()) {
+            if (range.isFixedValue()) {
+                parts.add("H3=${range.getFixedValue()}")
+            } else {
+                parts.add("H3=${range.min}-${range.max}")
+            }
+        }
+    }
+    config.H4?.let { range ->
+        if (range.hasValue()) {
+            if (range.isFixedValue()) {
+                parts.add("H4=${range.getFixedValue()}")
+            } else {
+                parts.add("H4=${range.min}-${range.max}")
+            }
+        }
+    }
+
+    return if (parts.isEmpty()) {
+        "Base Config"
+    } else {
+        parts.joinToString("\n")
+    }
 }

@@ -6,6 +6,8 @@ package com.tailscale.ipn.ui.viewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.tailscale.ipn.ui.localapi.Client
+import com.tailscale.ipn.ui.model.AwgPeerResult
 import com.tailscale.ipn.ui.model.StableNodeID
 import com.tailscale.ipn.ui.model.Tailcfg
 import com.tailscale.ipn.ui.notifier.Notifier
@@ -37,11 +39,30 @@ class PeerDetailsViewModel(
   val node: StateFlow<Tailcfg.Node?> = MutableStateFlow(null)
   val isPinging: StateFlow<Boolean> = MutableStateFlow(false)
 
+  // AWG configuration for this peer
+  private val _awgConfig = MutableStateFlow<AwgPeerResult?>(null)
+  val awgConfig: StateFlow<AwgPeerResult?> = _awgConfig
+  private fun loadAwgConfigForPeer(peer: Tailcfg.Node) {
+      val client = Client(viewModelScope)
+      client.awgSyncPeers { result ->
+          result.onSuccess { awgPeers ->
+              val peerHostname = peer.ComputedName ?: peer.Name
+              val awgPeer = awgPeers.find { it.hostname == peerHostname }
+              _awgConfig.value = awgPeer
+          }.onFailure {
+              _awgConfig.value = null
+          }
+      }
+  }
+
   init {
     viewModelScope.launch {
       Notifier.netmap.collect { nm ->
         netmap.set(nm)
-        nm?.getPeer(nodeId)?.let { peer -> node.set(peer) }
+        nm?.getPeer(nodeId)?.let { peer ->
+          node.set(peer)
+          loadAwgConfigForPeer(peer)
+        }
       }
     }
   }

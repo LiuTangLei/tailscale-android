@@ -3,6 +3,7 @@
 package com.tailscale.ipn.ui.view
 
 import android.os.Build
+import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -11,6 +12,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -34,6 +36,7 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -61,6 +64,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
@@ -85,6 +89,7 @@ import com.tailscale.ipn.ui.Links
 import com.tailscale.ipn.ui.model.Ipn
 import com.tailscale.ipn.ui.model.IpnLocal
 import com.tailscale.ipn.ui.model.Netmap
+import com.tailscale.ipn.ui.model.PeerAwgStatus
 import com.tailscale.ipn.ui.model.Permissions
 import com.tailscale.ipn.ui.model.Tailcfg
 import com.tailscale.ipn.ui.theme.customErrorContainer
@@ -252,6 +257,15 @@ fun MainView(
           PingView(model = viewModel.pingViewModel)
         }
       }
+    }
+    // AWG Status Toast
+    val awgStatusMessage by viewModel.awgStatusMessage.collectAsState()
+    val context = LocalContext.current
+    LaunchedEffect(awgStatusMessage) {
+        awgStatusMessage?.let { message ->
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            viewModel.clearAwgStatusMessage()
+        }
     }
   }
 }
@@ -663,6 +677,56 @@ fun PeerList(
                                       shape = RoundedCornerShape(percent = 50))) {}
                       Spacer(modifier = Modifier.size(8.dp))
                       Text(text = peer.displayName, style = MaterialTheme.typography.titleMedium)
+                      // AWG status indicator
+                      val awgStatus by viewModel.awgPeersStatus.collectAsState()
+                      val awgSyncInProgress by viewModel.awgSyncInProgress.collectAsState()
+                      val localAwgStatus by viewModel.localAwgStatus.collectAsState()
+                      val peerHostname = peer.Hostinfo.Hostname ?: peer.ComputedName ?: peer.Name
+                      val peerAwgKey = peerHostname.trim().substringBefore('.').lowercase()
+
+                      // Check if this is self node
+                      val isSelfNode = netmap.value?.let { peer.isSelfNode(it) } ?: false
+                      val hasAwgConfig =
+                          if (isSelfNode) {
+                              localAwgStatus // Use local AWG status for self node
+                          } else {
+                            awgStatus[peerAwgKey] == true // Use peer AWG status for other nodes
+                          }
+
+                      if (hasAwgConfig) {
+                          Spacer(modifier = Modifier.size(2.dp))
+                          Text(
+                              text = "\u2605",
+                              style = MaterialTheme.typography.titleMedium,
+                              color = Color(0xFFFFD700), // Gold color
+                          )
+
+                          // Only show sync button for peer nodes (not self node)
+                          if (!isSelfNode) {
+                              // AWG sync button
+                              Spacer(modifier = Modifier.size(2.dp))
+                              Button(
+                                  onClick = {
+                                      viewModel.syncAwgConfigFromPeer(peerHostname)
+                                  },
+                                  enabled = awgSyncInProgress != peerHostname,
+                                  modifier = Modifier.height(28.dp),
+                                  contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                              ) {
+                                  if (awgSyncInProgress == peerHostname) {
+                                      CircularProgressIndicator(
+                                          modifier = Modifier.size(16.dp),
+                                          strokeWidth = 2.dp,
+                                      )
+                                  } else {
+                                      Text(
+                                          text = "Sync",
+                                          style = MaterialTheme.typography.bodySmall,
+                                      )
+                                  }
+                              }
+                          }
+                      }
                       DropdownMenu(
                           expanded = expandedPeer.value?.StableID == peer.StableID,
                           onDismissRequest = { viewModel.hidePeerDropdownMenu() }) {
