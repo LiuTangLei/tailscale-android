@@ -31,13 +31,15 @@ apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.plugin.serialization'
 apply plugin: 'com.ncorti.ktfmt.gradle'
 
+def releaseSigning = getReleaseSigningConfig()
+
 android {
     ndkVersion "23.1.7779620"
     compileSdkVersion 34
     defaultConfig {
         minSdkVersion 26
         targetSdkVersion 35
-        versionCode 468
+        versionCode 527
         versionName getVersionProperty("VERSION_LONG")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
@@ -73,6 +75,18 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = "$compose_version"
     }
+
+    if (releaseSigning != null) {
+        signingConfigs {
+            release {
+                storeFile releaseSigning.storeFile
+                storePassword releaseSigning.storePassword
+                keyAlias releaseSigning.keyAlias
+                keyPassword releaseSigning.keyPassword
+            }
+        }
+    }
+
     flavorDimensions "version"
     namespace 'com.tailscale.ipn'
 
@@ -97,6 +111,10 @@ android {
             proguardFiles getDefaultProguardFile(
                     'proguard-android-optimize.txt'),
                     'proguard-rules.pro'
+
+            if (releaseSigning != null) {
+                signingConfig signingConfigs.release
+            }
         }
         release_tv {
             initWith release
@@ -183,6 +201,33 @@ def getLocalProperty(key, defaultValue) {
     } catch(Throwable ignored) {
         return defaultValue
     }
+}
+
+def getEnvOrLocalProperty(envKey, localKey, defaultValue) {
+    def envValue = System.getenv(envKey)
+    if (envValue != null && !envValue.trim().isEmpty()) {
+        return envValue
+    }
+    return getLocalProperty(localKey, defaultValue)
+}
+
+def getReleaseSigningConfig() {
+    def storeFilePath = getEnvOrLocalProperty("TAILSCALE_ANDROID_KEYSTORE_PATH", "tailscale.signing.storeFile", "../my-release-key.keystore")
+    if (storeFilePath == null || storeFilePath.trim().isEmpty()) {
+        return null
+    }
+
+    def storeFile = project.file(storeFilePath)
+    if (!storeFile.exists()) {
+        return null
+    }
+
+    return [
+            storeFile: storeFile,
+            storePassword: getEnvOrLocalProperty("TAILSCALE_ANDROID_KEYSTORE_PASSWORD", "tailscale.signing.storePassword", "123456"),
+            keyAlias: getEnvOrLocalProperty("TAILSCALE_ANDROID_KEY_ALIAS", "tailscale.signing.keyAlias", "my-key-alias"),
+            keyPassword: getEnvOrLocalProperty("TAILSCALE_ANDROID_KEY_PASSWORD", "tailscale.signing.keyPassword", "123456"),
+    ]
 }
 
 

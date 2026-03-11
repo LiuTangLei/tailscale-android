@@ -71,6 +71,16 @@ ANDROID_STUDIO_ROOT ?= $(shell find ~/android-studio /usr/local/android-studio /
 
 # Set JAVA_HOME to the Android Studio bundled JDK.
 export JAVA_HOME ?= $(shell find "$(ANDROID_STUDIO_ROOT)/jbr" "$(ANDROID_STUDIO_ROOT)/jre" "$(ANDROID_STUDIO_ROOT)/Contents/jbr/Contents/Home" "$(ANDROID_STUDIO_ROOT)/Contents/jre/Contents/Home" -maxdepth 1 -type d 2>/dev/null | head -n 1)
+
+# Fallback to Homebrew OpenJDK if Android Studio JDK is unavailable.
+ifeq ($(JAVA_HOME),)
+	ifneq ($(wildcard /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home),)
+		export JAVA_HOME := /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+	else ifneq ($(wildcard /usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home),)
+		export JAVA_HOME := /usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+	endif
+endif
+
 ifeq ($(JAVA_HOME),)
     unexport JAVA_HOME
 else
@@ -388,12 +398,12 @@ help: ## Show this help
 	@grep -hE '^[0-9a-zA-Z_-]+:.*?## .*$$' ${MAKEFILE_LIST} | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[0;36m%-20s\033[m %s\n", $$1, $$2}'
 	@echo ""
 
-# Build and sign a release APK with self-generated keystore
+# Build a signed release APK (signing config is in android/build.gradle)
 .PHONY: release-signed
-release-signed: libtailscale version gradle-dependencies ## Build a release APK signed with self-generated keystore
-	@echo "Building release APK with self-signing"
+release-signed: libtailscale version gradle-dependencies ## Build a signed release APK
+	@echo "Building signed release APK"
 	(cd android && ./gradlew assembleRelease)
 	install -C ./android/build/outputs/apk/release/android-release.apk tailscale-release-signed.apk
-	@echo "Release APK built and saved as tailscale-release-signed.apk"
+	@echo "Signed release APK saved as tailscale-release-signed.apk"
 
 .DEFAULT_GOAL := help
