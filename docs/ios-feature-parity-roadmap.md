@@ -6,13 +6,13 @@
 
 ## 文档验证状态
 
-> 最后验证时间: 2025-01
+> 最后验证时间: 2026-04
 
 以下关键信息已通过 Tailscale 官方文档验证：
 
 | 验证项 | 状态 | 来源 |
 |--------|------|------|
-| iOS 支持 Run as Exit Node | ✅ 已确认 | tailscale.com/kb/1103/exit-nodes |
+| iOS **不支持** Run as Exit Node | ❌ 已确认 | tailscale.com/kb/1103/exit-nodes |
 | iOS 支持使用 Exit Nodes | ✅ 已确认 | tailscale.com/kb/1103/exit-nodes |
 | Taildrop iOS 接收端不支持断点续传 | ✅ 已确认 | tailscale.com/kb/1106/taildrop |
 | iOS 不能发布 Subnet Routes | ✅ 已确认 | tailscale.com/kb/1019/subnets |
@@ -87,14 +87,14 @@ let maskedPrefs = MaskedPrefs(
 await appState.editPrefs(maskedPrefs)
 ```
 
-#### 2.2 Run as Exit Node
-| 任务 | 优先级 | 工作量 | 依赖 |
-|-----|--------|--------|------|
-| Exit Node 提供开关 | P1 | 2d | - |
-| 警告提示（电量/流量消耗） | P1 | 0.5d | 2.2.1 |
-| 状态指示（正在为 N 个节点提供服务） | P2 | 1d | 2.2.1 |
+#### ~~2.2 Run as Exit Node~~ (已移除)
 
-**✅ 已验证**: 官方 Tailscale 文档显示 iOS 支持 "Run as Exit Node"（见 iOS 安装页面）。需要管理员审批 ACL 策略。电池和蜂窝流量消耗需要警告提示。
+**❌ 经重新验证**: 官方 Tailscale 文档明确指出 iOS **不支持** "Run as Exit Node"。
+- Exit Node 可运行平台: Linux, macOS, Windows, Android, tvOS
+- iOS 仅支持**使用**其他设备作为 Exit Node，不支持**作为** Exit Node
+- 参考: https://tailscale.com/kb/1103/exit-nodes (Prerequisites 部分)
+
+此功能已从代码中移除。
 
 #### 2.3 Health 详情页
 | 任务 | 优先级 | 工作量 | 依赖 |

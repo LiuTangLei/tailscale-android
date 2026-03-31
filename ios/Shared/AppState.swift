@@ -483,13 +483,8 @@ class AppState: ObservableObject {
     }
 
     // MARK: - Exit Node
-
-    /// Whether this device is configured to run as an exit node.
-    var isRunningAsExitNode: Bool {
-        // This would be determined by the backend prefs
-        // For now, return false as we need to check AdvertiseRoutes
-        return false
-    }
+    // Note: iOS does not support running AS an exit node (only using exit nodes).
+    // See: https://tailscale.com/kb/1103/exit-nodes
 
     /// Set the exit node to use for routing traffic.
     func setExitNode(_ peer: PeerNode) {
@@ -551,23 +546,5 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Configure this device to run as an exit node.
-    func setRunAsExitNode(_ enabled: Bool) {
-        guard let vpn = vpnManager else {
-            lastError = "VPN manager not available"
-            return
-        }
-
-        Task {
-            do {
-                // Use the advertise-exit-node endpoint
-                let endpoint = enabled
-                    ? "/localapi/v0/set-advertise-exit-node?enabled=true"
-                    : "/localapi/v0/set-advertise-exit-node?enabled=false"
-                let _ = try await vpn.callLocalAPI(method: "POST", endpoint: endpoint)
-            } catch {
-                lastError = "Failed to \(enabled ? "enable" : "disable") exit node: \(error.localizedDescription)"
-            }
-        }
-    }
+    // Note: setRunAsExitNode removed - iOS does not support advertising as an exit node.
 }

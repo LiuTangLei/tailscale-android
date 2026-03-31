@@ -150,21 +150,8 @@ struct ExitNodeView: View {
                 Text("Available Exit Nodes")
             }
             
-            // Run as exit node section
-            Section {
-                NavigationLink(destination: RunAsExitNodeView()) {
-                    HStack {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .foregroundColor(.accentColor)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Run as Exit Node")
-                            Text("Allow other devices to use this device as an exit node")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-            }
+            // Note: iOS does not support running as an exit node.
+            // Only Linux, macOS, Windows, Android, and tvOS can advertise as exit nodes.
         }
         .searchable(text: $searchText, prompt: "Search exit nodes")
         .navigationTitle("Exit Node")
@@ -217,70 +204,11 @@ struct ExitNodeRow: View {
     }
 }
 
-/// View for configuring this device to run as an exit node.
-struct RunAsExitNodeView: View {
-    @EnvironmentObject var appState: AppState
-    @State private var isRunningAsExitNode: Bool = false
-    @State private var showingWarning: Bool = false
-    
-    var body: some View {
-        List {
-            Section {
-                Toggle("Run as Exit Node", isOn: $isRunningAsExitNode)
-                    .onChange(of: isRunningAsExitNode) { newValue in
-                        if newValue {
-                            showingWarning = true
-                        } else {
-                            appState.setRunAsExitNode(false)
-                        }
-                    }
-            } footer: {
-                Text("When enabled, other devices on your Tailscale network can route their internet traffic through this device.")
-            }
-            
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    WarningRow(
-                        icon: "battery.50",
-                        title: "Battery Usage",
-                        description: "Running as an exit node may significantly increase battery consumption."
-                    )
-                    WarningRow(
-                        icon: "antenna.radiowaves.left.and.right",
-                        title: "Cellular Data",
-                        description: "Traffic from other devices will use your cellular data if connected via cellular."
-                    )
-                    WarningRow(
-                        icon: "shield.lefthalf.filled",
-                        title: "Admin Approval",
-                        description: "Exit nodes must be approved by a Tailnet admin in the admin console."
-                    )
-                }
-                .padding(.vertical, 4)
-            } header: {
-                Text("Important Notes")
-            }
-        }
-        .navigationTitle("Run as Exit Node")
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            // Check current status
-            isRunningAsExitNode = appState.isRunningAsExitNode
-        }
-        .alert("Enable Exit Node?", isPresented: $showingWarning) {
-            Button("Cancel", role: .cancel) {
-                isRunningAsExitNode = false
-            }
-            Button("Enable") {
-                appState.setRunAsExitNode(true)
-            }
-        } message: {
-            Text("This will allow other devices to route their internet traffic through your device. This may use significant battery and cellular data. An admin must also approve this device as an exit node.")
-        }
-    }
-}
+// Note: RunAsExitNodeView removed - iOS does not support running as an exit node.
+// Only Linux, macOS, Windows, Android, and tvOS can advertise as exit nodes.
+// See: https://tailscale.com/kb/1103/exit-nodes
 
-/// Warning row component.
+/// Warning row component (kept for potential reuse).
 struct WarningRow: View {
     let icon: String
     let title: String

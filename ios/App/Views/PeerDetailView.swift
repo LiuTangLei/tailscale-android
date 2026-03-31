@@ -143,7 +143,7 @@ struct PeerDetailView: View {
                 Text("Network")
             }
             
-            // Diagnostics section (coming soon)
+            // Diagnostics section
             if !peer.isCurrentDevice && peer.online {
                 Section {
                     NavigationLink {
