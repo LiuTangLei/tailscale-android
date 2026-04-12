@@ -53,6 +53,9 @@ class AppViewModel(application: Application, private val taildropPrompt: Flow<Un
   // VpnServiceBuilder.establish, and consumed by UI to reflect VPN state.
   val _vpnActive = MutableStateFlow(false)
   val vpnActive: StateFlow<Boolean> = _vpnActive
+  // Whether the local node currently has a non-default AWG configuration applied.
+  val _localAwgConfigured = MutableStateFlow(false)
+  val localAwgConfigured: StateFlow<Boolean> = _localAwgConfigured
   // Select Taildrop directory
   var directoryPickerLauncher: ActivityResultLauncher<Uri?>? = null
   private val _triggerDirectoryPicker = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -115,5 +118,9 @@ class AppViewModel(application: Application, private val taildropPrompt: Flow<Un
 
   fun setVpnPrepared(isPrepared: Boolean) {
     _vpnPrepared.value = isPrepared
+  }
+
+  fun setLocalAwgConfigured(isConfigured: Boolean) {
+    _localAwgConfigured.value = isConfigured
   }
 }

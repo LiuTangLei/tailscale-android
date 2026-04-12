@@ -5,9 +5,11 @@ package com.tailscale.ipn.ui.viewModel
 
 import androidx.lifecycle.viewModelScope
 import com.tailscale.ipn.ui.localapi.Client
+import com.tailscale.ipn.ui.model.AwgPeerResult
 import com.tailscale.ipn.ui.notifier.Notifier
 import com.tailscale.ipn.ui.util.LoadingIndicator
 import com.tailscale.ipn.ui.util.set
+import com.tailscale.ipn.util.TSLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -23,6 +25,9 @@ data class SettingsNav(
     val onNavigateToManagedBy: () -> Unit,
     val onNavigateToUserSwitcher: () -> Unit,
     val onNavigateToPermissions: () -> Unit,
+    val onNavigateToAwgManual: () -> Unit,
+    val onNavigateToAwgJson: () -> Unit,
+    val onNavigateToAwgViewer: () -> Unit,
     val onNavigateBackHome: () -> Unit,
     val onBackToSettings: () -> Unit,
 )
@@ -34,6 +39,13 @@ class SettingsViewModel : IpnViewModel() {
   val tailNetLockEnabled: StateFlow<Boolean?> = MutableStateFlow(null)
   // True if tailscaleDNS is enabled. nil if not yet known.
   val corpDNSEnabled: StateFlow<Boolean?> = MutableStateFlow(null)
+
+  // AWG peers refresh state
+  private val _isRefreshingAwgPeers = MutableStateFlow(false)
+  val isRefreshingAwgPeers: StateFlow<Boolean> = _isRefreshingAwgPeers
+
+  private val _awgRefreshMessage = MutableStateFlow<String?>(null)
+  val awgRefreshMessage: StateFlow<String?> = _awgRefreshMessage
 
   init {
     viewModelScope.launch {
@@ -51,5 +63,31 @@ class SettingsViewModel : IpnViewModel() {
         it?.let { corpDNSEnabled.set(it.CorpDNS) } ?: run { corpDNSEnabled.set(null) }
       }
     }
+  }
+
+  fun refreshAwgPeers(onComplete: () -> Unit) {
+    _isRefreshingAwgPeers.value = true
+    val client = Client(viewModelScope)
+    client.awgSyncPeers { result ->
+      result.onSuccess { awgPeers: List<AwgPeerResult> ->
+        val awgCount = awgPeers.count { it.hasAwgConfig }
+        val total = awgPeers.size
+        _awgRefreshMessage.value = if (total > 0) {
+          if (awgCount > 0) "Found $awgCount/$total peers with AWG config"
+          else "Checked $total peers, no AWG config found"
+        } else {
+          "No peers found"
+        }
+      }.onFailure { error ->
+        TSLog.e("SettingsViewModel", "Failed to refresh AWG peers: ${error.message}")
+        _awgRefreshMessage.value = "Failed to refresh AWG peers: ${error.message}"
+      }
+      _isRefreshingAwgPeers.value = false
+      onComplete()
+    }
+  }
+
+  fun clearAwgRefreshMessage() {
+    _awgRefreshMessage.value = null
   }
 }

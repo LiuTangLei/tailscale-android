@@ -5,6 +5,7 @@ package com.tailscale.ipn.ui.model
 
 import android.net.Uri
 import java.util.UUID
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 
@@ -100,7 +101,15 @@ class Ipn {
       var AdvertiseRoutesSet: Boolean? = null,
       var ForceDaemonSet: Boolean? = null,
       var HostnameSet: Boolean? = null,
+      var AmneziaWGSet: Boolean? = null,
   ) {
+
+    @SerialName("AmneziaWG")
+    var AmneziaWG: AmneziaWGPrefs? = null
+      set(value) {
+        field = value
+        AmneziaWGSet = true
+      }
 
     var ControlURL: String? = null
       set(value) {
