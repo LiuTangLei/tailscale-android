@@ -115,11 +115,14 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 	paths.AppSharedDir.Store(a.dataDir)
 	hostinfo.SetOSVersion(a.osVersion())
 	hostinfo.SetPackage(a.appCtx.GetInstallSource())
-	deviceModel := a.modelName()
+	deviceModel := a.deviceName()
 	if a.isChromeOS() {
 		deviceModel = "ChromeOS: " + deviceModel
 	}
 	hostinfo.SetDeviceModel(deviceModel)
+	hostinfo.SetHostnameFn(func() (string, error) {
+		return a.deviceName(), nil
+	})
 
 	type configPair struct {
 		rcfg *router.Config
@@ -142,7 +145,10 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 	if hardwareAttestation {
 		a.backend.SetHardwareAttested()
 	}
-	defer b.CloseTUNs()
+	defer func() {
+		b.devices.Down()
+		b.CloseTUNs()
+	}()
 
 	hc := localapi.HandlerConfig{
 		Actor:    ipnauth.Self,
@@ -243,8 +249,11 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 				}
 			}
 		case s := <-onDisconnect:
-			b.CloseTUNs()
 			if vpnService.service != nil && vpnService.service.ID() == s.ID() {
+				if b.devices.Down() {
+					log.Printf("tunnel brought down on disconnect")
+				}
+				b.CloseTUNs()
 				netns.SetAndroidProtectFunc(nil)
 				vpnService.service = nil
 			}
@@ -389,7 +398,9 @@ func (a *App) closeVpnService(err error, b *backend) {
 		log.Printf("localapi edit prefs error %v", localApiErr)
 	}
 
-	b.lastCfg = nil
+	if b.devices.Down() {
+		log.Printf("tunnel brought down on VPN service error: %v", err)
+	}
 	b.CloseTUNs()
 
 	vpnService.service.DisconnectVPN()
