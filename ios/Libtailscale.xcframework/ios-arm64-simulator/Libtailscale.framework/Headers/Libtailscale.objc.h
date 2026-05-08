@@ -32,6 +32,8 @@
 @class LibtailscaleNotificationManager;
 @protocol LibtailscaleOutputStream;
 @class LibtailscaleOutputStream;
+@protocol LibtailscalePacketCallback;
+@class LibtailscalePacketCallback;
 @protocol LibtailscaleTunnelConfigCallback;
 @class LibtailscaleTunnelConfigCallback;
 
@@ -61,7 +63,10 @@
 @protocol LibtailscaleApplication <NSObject>
 - (id<LibtailscaleLocalAPIResponse> _Nullable)callLocalAPI:(long)timeoutMillis method:(NSString* _Nullable)method endpoint:(NSString* _Nullable)endpoint body:(id<LibtailscaleInputStream> _Nullable)body error:(NSError* _Nullable* _Nullable)error;
 - (id<LibtailscaleLocalAPIResponse> _Nullable)callLocalAPIMultipart:(long)timeoutMillis method:(NSString* _Nullable)method endpoint:(NSString* _Nullable)endpoint parts:(id<LibtailscaleFileParts> _Nullable)parts error:(NSError* _Nullable* _Nullable)error;
+- (BOOL)injectInboundPacket:(NSData* _Nullable)packet error:(NSError* _Nullable* _Nullable)error;
 - (void)notifyPolicyChanged;
+- (void)setPacketCallback:(id<LibtailscalePacketCallback> _Nullable)cb;
+- (void)stop;
 - (id<LibtailscaleNotificationManager> _Nullable)watchNotifications:(long)mask cb:(id<LibtailscaleNotificationCallback> _Nullable)cb;
 @end
 
@@ -94,6 +99,10 @@
 - (BOOL)write:(NSData* _Nullable)p0 ret0_:(long* _Nullable)ret0_ error:(NSError* _Nullable* _Nullable)error;
 @end
 
+@protocol LibtailscalePacketCallback <NSObject>
+- (BOOL)onPacket:(NSData* _Nullable)packet error:(NSError* _Nullable* _Nullable)error;
+@end
+
 @protocol LibtailscaleTunnelConfigCallback <NSObject>
 /**
  * OnTunnelConfigUpdate receives a JSON-encoded TunnelConfig. The
@@ -105,7 +114,7 @@ Extension must apply these settings and return nil on success.
 /**
  * App is the concrete iOS libtailscale runtime.
  */
-@interface LibtailscaleApp : NSObject <goSeqRefInterface, LibtailscaleApplication> {
+@interface LibtailscaleApp : NSObject <goSeqRefInterface, LibtailscaleApplication, LibtailscaleNotificationManager> {
 }
 @property(strong, readonly) _Nonnull id _ref;
 
@@ -125,10 +134,13 @@ supplied parts.
 - (id<LibtailscaleLocalAPIResponse> _Nullable)callLocalAPIMultipart:(long)timeoutMillis method:(NSString* _Nullable)method endpoint:(NSString* _Nullable)endpoint parts:(id<LibtailscaleFileParts> _Nullable)parts error:(NSError* _Nullable* _Nullable)error;
 // skipped method App.EditPrefs with unsupported parameter or return types
 
+- (BOOL)injectInboundPacket:(NSData* _Nullable)packet error:(NSError* _Nullable* _Nullable)error;
 /**
  * NotifyPolicyChanged notifies the backend about a changed MDM policy.
  */
 - (void)notifyPolicyChanged;
+- (void)setPacketCallback:(id<LibtailscalePacketCallback> _Nullable)cb;
+- (void)stop;
 - (id<LibtailscaleNotificationManager> _Nullable)watchNotifications:(long)mask cb:(id<LibtailscaleNotificationCallback> _Nullable)cb;
 @end
 
@@ -188,6 +200,8 @@ setTunnelNetworkSettings.
 // skipped field TunnelConfig.DNSServers with unsupported type: []string
 
 // skipped field TunnelConfig.DNSDomains with unsupported type: []string
+
+// skipped field TunnelConfig.DNSMatchDomains with unsupported type: []string
 
 /**
  * Tunnel
@@ -253,6 +267,8 @@ FOUNDATION_EXPORT id<LibtailscaleApplication> _Nullable LibtailscaleStart(NSStri
 
 @class LibtailscaleOutputStream;
 
+@class LibtailscalePacketCallback;
+
 @class LibtailscaleTunnelConfigCallback;
 
 /**
@@ -295,7 +311,10 @@ FOUNDATION_EXPORT id<LibtailscaleApplication> _Nullable LibtailscaleStart(NSStri
 - (nonnull instancetype)initWithRef:(_Nonnull id)ref;
 - (id<LibtailscaleLocalAPIResponse> _Nullable)callLocalAPI:(long)timeoutMillis method:(NSString* _Nullable)method endpoint:(NSString* _Nullable)endpoint body:(id<LibtailscaleInputStream> _Nullable)body error:(NSError* _Nullable* _Nullable)error;
 - (id<LibtailscaleLocalAPIResponse> _Nullable)callLocalAPIMultipart:(long)timeoutMillis method:(NSString* _Nullable)method endpoint:(NSString* _Nullable)endpoint parts:(id<LibtailscaleFileParts> _Nullable)parts error:(NSError* _Nullable* _Nullable)error;
+- (BOOL)injectInboundPacket:(NSData* _Nullable)packet error:(NSError* _Nullable* _Nullable)error;
 - (void)notifyPolicyChanged;
+- (void)setPacketCallback:(id<LibtailscalePacketCallback> _Nullable)cb;
+- (void)stop;
 - (id<LibtailscaleNotificationManager> _Nullable)watchNotifications:(long)mask cb:(id<LibtailscaleNotificationCallback> _Nullable)cb;
 @end
 
@@ -368,6 +387,18 @@ FOUNDATION_EXPORT id<LibtailscaleApplication> _Nullable LibtailscaleStart(NSStri
 - (nonnull instancetype)initWithRef:(_Nonnull id)ref;
 - (BOOL)close:(NSError* _Nullable* _Nullable)error;
 - (BOOL)write:(NSData* _Nullable)p0 ret0_:(long* _Nullable)ret0_ error:(NSError* _Nullable* _Nullable)error;
+@end
+
+/**
+ * PacketCallback receives packets written by the Go TUN device. The Swift
+PacketTunnelProvider writes them to NEPacketTunnelFlow.
+ */
+@interface LibtailscalePacketCallback : NSObject <goSeqRefInterface, LibtailscalePacketCallback> {
+}
+@property(strong, readonly) _Nonnull id _ref;
+
+- (nonnull instancetype)initWithRef:(_Nonnull id)ref;
+- (BOOL)onPacket:(NSData* _Nullable)packet error:(NSError* _Nullable* _Nullable)error;
 @end
 
 /**

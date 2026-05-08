@@ -1,3 +1,5 @@
+import Darwin
+import Foundation
 import NetworkExtension
 import os
 
@@ -7,13 +9,32 @@ import os
 /// Do NOT use UIApplication, shared global state, or any App-process APIs here.
 class PacketTunnelProvider: NEPacketTunnelProvider {
 
+    private struct TunnelSettingsRequest {
+        let settings: NEPacketTunnelNetworkSettings
+        let completion: ((Error?) -> Void)?
+    }
+
     private let logger = Logger(subsystem: "com.tailscale.ipn.ios", category: "tunnel")
     private var notifyHandle: NotificationHandle?
+    private var tunnelConfigCallback: AnyObject?
+    private let packetQueue = DispatchQueue(label: "com.tailscale.ipn.ios.packetflow", qos: .userInitiated)
+    private let packetQueueKey = DispatchSpecificKey<Void>()
+    private var packetReadLoopRunning = false
+    private let tunnelSettingsQueue = DispatchQueue(label: "com.tailscale.ipn.ios.tunnel-settings")
+    private var tunnelStopping = false
+    private var tunnelSettingsInFlight = false
+    private var pendingTunnelSettings: TunnelSettingsRequest?
+
+    override init() {
+        super.init()
+        packetQueue.setSpecific(key: packetQueueKey, value: ())
+    }
 
     // MARK: - Lifecycle
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         logger.log("startTunnel: beginning")
+        resetTunnelLifecycleState()
 
         // 1. Determine data directory inside App Group container
         guard let containerURL = sharedContainerURL else {
@@ -49,26 +70,38 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         logger.log("startTunnel: Go backend started")
 
-        // 3. Register tunnel config callback so Go backend can push route/DNS changes
+        // 3. Bridge IP packets between NetworkExtension and Go's TUN device.
+        startPacketBridge()
+
+        // 4. Register tunnel config callback so Go backend can push route/DNS changes
         #if canImport(Libtailscale)
         if let app = GoBridge.application {
             let configCb = GoTunnelConfigCallback { [weak self] configJSON in
                 self?.handleTunnelConfigUpdate(configJSON)
             }
+            tunnelConfigCallback = configCb
             LibtailscaleSetTunnelConfigCallback(app, configCb)
         }
         #endif
 
-        // 4. Subscribe to WatchNotifications to track state
-        notifyHandle = GoBridge.watchNotifications(mask: NotifyWatchOpt.defaultMask) { [weak self] data in
+        // 5. Subscribe to WatchNotifications to track state
+        guard let notifyHandle = GoBridge.watchNotifications(mask: NotifyWatchOpt.defaultMask, callback: { [weak self] data in
             self?.handleNotification(data)
+        }) else {
+            logger.error("startTunnel: failed to watch Go backend notifications")
+            cleanupStartedBackend()
+            let err = NSError(domain: "PacketTunnel", code: 4,
+                              userInfo: [NSLocalizedDescriptionKey: "Go backend did not become ready"])
+            completionHandler(err)
+            return
         }
+        self.notifyHandle = notifyHandle
         logger.log("startTunnel: watching notifications")
 
-        // 5. Configure initial tunnel settings
+        // 6. Configure initial tunnel settings
         //    Real settings update from Go backend via TunnelConfigCallback.
         let settings = createInitialTunnelSettings()
-        setTunnelNetworkSettings(settings) { [weak self] error in
+        enqueueTunnelSettingsUpdate(settings) { [weak self] error in
             if let error = error {
                 self?.logger.error("startTunnel: setTunnelNetworkSettings failed: \(error.localizedDescription)")
                 completionHandler(error)
@@ -81,12 +114,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logger.log("stopTunnel: reason=\(String(describing: reason))")
+        markTunnelStopping()
 
         // Stop notifications
         if let handle = notifyHandle {
             GoBridge.stopNotifications(handle)
             notifyHandle = nil
         }
+        #if canImport(Libtailscale)
+        if let app = GoBridge.application {
+            LibtailscaleSetTunnelConfigCallback(app, nil)
+        }
+        #endif
+        tunnelConfigCallback = nil
+        GoBridge.stopBackend()
 
         // Write disconnected state to shared defaults
         writeSharedState(ipnState: 3) // IpnState.stopped
@@ -98,6 +139,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     /// Called by Go when router.Config or dns.OSConfig changes.
     private func handleTunnelConfigUpdate(_ configJSON: Data) {
+        guard !isTunnelStopping() else { return }
         do {
             let config = try JSONDecoder().decode(TunnelConfigFromGo.self, from: configJSON)
             let settings = buildTunnelSettings(from: config)
@@ -122,63 +164,67 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         // Parse local addresses (CIDR notation)
         for addrStr in config.localAddresses {
-            let parts = addrStr.split(separator: "/")
-            guard parts.count == 2 else { continue }
-            let ip = String(parts[0])
-            let prefixLen = Int(parts[1]) ?? 32
+            guard let parsed = parseCIDR(addrStr) else {
+                logger.error("ignoring malformed local tunnel address: \(addrStr, privacy: .private)")
+                continue
+            }
 
-            if ip.contains(":") {
-                ipv6Addrs.append(ip)
-                ipv6PrefixLens.append(NSNumber(value: prefixLen))
+            if parsed.address.contains(":") {
+                guard (0...128).contains(parsed.prefixLen) else {
+                    logger.error("ignoring IPv6 tunnel address with invalid prefix: \(addrStr, privacy: .private)")
+                    continue
+                }
+                ipv6Addrs.append(parsed.address)
+                ipv6PrefixLens.append(NSNumber(value: parsed.prefixLen))
             } else {
-                ipv4Addrs.append(ip)
-                ipv4Masks.append(prefixLenToMask(prefixLen))
+                guard (0...32).contains(parsed.prefixLen) else {
+                    logger.error("ignoring IPv4 tunnel address with invalid prefix: \(addrStr, privacy: .private)")
+                    continue
+                }
+                ipv4Addrs.append(parsed.address)
+                ipv4Masks.append(prefixLenToMask(parsed.prefixLen))
             }
         }
 
         // IPv4
         if !ipv4Addrs.isEmpty {
             let ipv4 = NEIPv4Settings(addresses: ipv4Addrs, subnetMasks: ipv4Masks)
-            var routes: [NEIPv4Route] = []
-            for routeStr in config.routes {
-                if routeStr.contains(":") { continue } // skip IPv6
-                let rParts = routeStr.split(separator: "/")
-                guard rParts.count == 2 else { continue }
-                routes.append(NEIPv4Route(destinationAddress: String(rParts[0]),
-                                          subnetMask: prefixLenToMask(Int(rParts[1]) ?? 32)))
-            }
+            var routes = config.routes.compactMap(makeIPv4Route)
             if routes.isEmpty {
                 routes = [NEIPv4Route.default()]
             }
             ipv4.includedRoutes = routes
+            let excludedRoutes = (config.excludeRoutes ?? []).compactMap(makeIPv4Route)
+            if !excludedRoutes.isEmpty {
+                ipv4.excludedRoutes = excludedRoutes
+            }
             settings.ipv4Settings = ipv4
         }
 
         // IPv6
         if !ipv6Addrs.isEmpty {
             let ipv6 = NEIPv6Settings(addresses: ipv6Addrs, networkPrefixLengths: ipv6PrefixLens)
-            var routes: [NEIPv6Route] = []
-            for routeStr in config.routes {
-                if !routeStr.contains(":") { continue } // skip IPv4
-                let rParts = routeStr.split(separator: "/")
-                guard rParts.count == 2 else { continue }
-                routes.append(NEIPv6Route(destinationAddress: String(rParts[0]),
-                                          networkPrefixLength: NSNumber(value: Int(rParts[1]) ?? 128)))
-            }
+            var routes = config.routes.compactMap(makeIPv6Route)
             if routes.isEmpty {
                 routes = [NEIPv6Route.default()]
             }
             ipv6.includedRoutes = routes
+            let excludedRoutes = (config.excludeRoutes ?? []).compactMap(makeIPv6Route)
+            if !excludedRoutes.isEmpty {
+                ipv6.excludedRoutes = excludedRoutes
+            }
             settings.ipv6Settings = ipv6
         }
 
         // DNS
         if !config.dnsServers.isEmpty {
             let dns = NEDNSSettings(servers: config.dnsServers)
-            if config.dnsDomains.isEmpty {
-                dns.matchDomains = [""] // Route all DNS through tunnel
+            if let matchDomains = config.dnsMatchDomains, !matchDomains.isEmpty {
+                dns.matchDomains = matchDomains
             } else {
-                dns.matchDomains = [""] // Still route all DNS for MagicDNS
+                dns.matchDomains = [""] // Primary resolver for Tailscale DNS.
+            }
+            if !config.dnsDomains.isEmpty {
                 dns.searchDomains = config.dnsDomains
             }
             settings.dnsSettings = dns
@@ -321,12 +367,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "100.100.100.100")
 
         let ipv4 = NEIPv4Settings(addresses: ["100.64.0.1"], subnetMasks: ["255.255.255.255"])
-        ipv4.includedRoutes = [NEIPv4Route.default()]
+        ipv4.includedRoutes = [NEIPv4Route(destinationAddress: "100.64.0.0", subnetMask: "255.192.0.0")]
         settings.ipv4Settings = ipv4
-
-        let dns = NEDNSSettings(servers: ["100.100.100.100"])
-        dns.matchDomains = [""] // Route all DNS through tunnel
-        settings.dnsSettings = dns
 
         settings.mtu = 1280
 
@@ -336,9 +378,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// Re-apply tunnel settings without destroying the TUN device.
     /// iOS supports this via setTunnelNetworkSettings + reasserting flag.
     func updateTunnelSettings(_ settings: NEPacketTunnelNetworkSettings) {
-        reasserting = true
-        setTunnelNetworkSettings(settings) { [weak self] error in
-            self?.reasserting = false
+        enqueueTunnelSettingsUpdate(settings) { [weak self] error in
             if let error = error {
                 self?.logger.error("updateTunnelSettings failed: \(error.localizedDescription)")
             }
@@ -348,27 +388,190 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     // MARK: - Helpers
 
     private func prefixLenToMask(_ prefixLen: Int) -> String {
-        var mask: UInt32 = 0
-        if prefixLen > 0 {
-            mask = UInt32.max << (32 - min(prefixLen, 32))
-        }
-        let b0 = UInt8((mask >> 24) & 0xFF)
-        let b1 = UInt8((mask >> 16) & 0xFF)
-        let b2 = UInt8((mask >> 8) & 0xFF)
-        let b3 = UInt8(mask & 0xFF)
-        return "\(b0).\(b1).\(b2).\(b3)"
+        return ipv4PrefixLenToMask(prefixLen)
     }
-}
 
-// MARK: - Tunnel Config Model (JSON from Go)
+    private func makeIPv4Route(_ routeStr: String) -> NEIPv4Route? {
+        if routeStr.contains(":") { return nil }
+        guard let route = parseCIDR(routeStr) else {
+            logger.error("ignoring malformed IPv4 route: \(routeStr, privacy: .private)")
+            return nil
+        }
+        guard (0...32).contains(route.prefixLen) else {
+            logger.error("ignoring IPv4 route with invalid prefix: \(routeStr, privacy: .private)")
+            return nil
+        }
+        return NEIPv4Route(destinationAddress: route.address, subnetMask: prefixLenToMask(route.prefixLen))
+    }
 
-struct TunnelConfigFromGo: Codable {
-    let localAddresses: [String]
-    let routes: [String]
-    let excludeRoutes: [String]?
-    let dnsServers: [String]
-    let dnsDomains: [String]
-    let mtu: Int
+    private func makeIPv6Route(_ routeStr: String) -> NEIPv6Route? {
+        if !routeStr.contains(":") { return nil }
+        guard let route = parseCIDR(routeStr) else {
+            logger.error("ignoring malformed IPv6 route: \(routeStr, privacy: .private)")
+            return nil
+        }
+        guard (0...128).contains(route.prefixLen) else {
+            logger.error("ignoring IPv6 route with invalid prefix: \(routeStr, privacy: .private)")
+            return nil
+        }
+        return NEIPv6Route(destinationAddress: route.address,
+                           networkPrefixLength: NSNumber(value: route.prefixLen))
+    }
+
+    private func resetTunnelLifecycleState() {
+        if DispatchQueue.getSpecific(key: packetQueueKey) != nil {
+            packetReadLoopRunning = false
+        } else {
+            packetQueue.sync {
+                packetReadLoopRunning = false
+            }
+        }
+        tunnelSettingsQueue.sync {
+            tunnelStopping = false
+            tunnelSettingsInFlight = false
+            pendingTunnelSettings = nil
+        }
+    }
+
+    private func markTunnelStopping() {
+        tunnelSettingsQueue.sync {
+            tunnelStopping = true
+            pendingTunnelSettings = nil
+        }
+        stopPacketBridge()
+    }
+
+    private func cleanupStartedBackend() {
+        markTunnelStopping()
+        #if canImport(Libtailscale)
+        if let app = GoBridge.application {
+            LibtailscaleSetTunnelConfigCallback(app, nil)
+        }
+        #endif
+        tunnelConfigCallback = nil
+        GoBridge.stopBackend()
+    }
+
+    private func isTunnelStopping() -> Bool {
+        return tunnelSettingsQueue.sync {
+            tunnelStopping
+        }
+    }
+
+    private func enqueueTunnelSettingsUpdate(_ settings: NEPacketTunnelNetworkSettings,
+                                             completion: ((Error?) -> Void)? = nil) {
+        tunnelSettingsQueue.async { [weak self] in
+            guard let self = self else { return }
+            guard !self.tunnelStopping else {
+                completion?(nil)
+                return
+            }
+            let request = TunnelSettingsRequest(settings: settings, completion: completion)
+            if self.tunnelSettingsInFlight {
+                self.pendingTunnelSettings = request
+                return
+            }
+            self.tunnelSettingsInFlight = true
+            self.performTunnelSettingsUpdate(request)
+        }
+    }
+
+    private func performTunnelSettingsUpdate(_ request: TunnelSettingsRequest) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            guard !self.isTunnelStopping() else {
+                request.completion?(nil)
+                self.finishTunnelSettingsUpdate()
+                return
+            }
+            self.reasserting = true
+            self.setTunnelNetworkSettings(request.settings) { [weak self] error in
+                request.completion?(error)
+                self?.finishTunnelSettingsUpdate()
+            }
+        }
+    }
+
+    private func finishTunnelSettingsUpdate() {
+        tunnelSettingsQueue.async { [weak self] in
+            guard let self = self else { return }
+            if self.tunnelStopping {
+                self.pendingTunnelSettings = nil
+                self.tunnelSettingsInFlight = false
+                DispatchQueue.main.async { [weak self] in
+                    self?.reasserting = false
+                }
+                return
+            }
+            if let next = self.pendingTunnelSettings {
+                self.pendingTunnelSettings = nil
+                self.performTunnelSettingsUpdate(next)
+                return
+            }
+            self.tunnelSettingsInFlight = false
+            DispatchQueue.main.async { [weak self] in
+                self?.reasserting = false
+            }
+        }
+    }
+
+    // MARK: - Packet Flow Bridge
+
+    private func startPacketBridge() {
+        GoBridge.setPacketCallback { [weak self] packet in
+            self?.writePacketToFlow(packet)
+        }
+
+        packetQueue.async { [weak self] in
+            guard let self = self, !self.packetReadLoopRunning else { return }
+            self.packetReadLoopRunning = true
+            self.readPacketsFromFlow()
+        }
+    }
+
+    private func stopPacketBridge() {
+        if DispatchQueue.getSpecific(key: packetQueueKey) != nil {
+            packetReadLoopRunning = false
+        } else {
+            packetQueue.sync {
+                packetReadLoopRunning = false
+            }
+        }
+        GoBridge.clearPacketCallback()
+    }
+
+    private func readPacketsFromFlow() {
+        guard packetReadLoopRunning else { return }
+        packetFlow.readPackets { [weak self] packets, _ in
+            guard let self = self else { return }
+            self.packetQueue.async {
+                guard self.packetReadLoopRunning else { return }
+                for packet in packets {
+                    do {
+                        try GoBridge.injectInboundPacket(packet)
+                    } catch {
+                        self.logger.error("injectInboundPacket failed: \(error.localizedDescription)")
+                    }
+                }
+                self.readPacketsFromFlow()
+            }
+        }
+    }
+
+    private func writePacketToFlow(_ packet: Data) {
+        packetQueue.async { [weak self] in
+            guard let self = self, self.packetReadLoopRunning else { return }
+            guard let protocolFamily = self.protocolFamily(for: packet) else {
+                self.logger.error("dropping packet with unknown IP version")
+                return
+            }
+            self.packetFlow.writePackets([packet], withProtocols: [protocolFamily])
+        }
+    }
+
+    private func protocolFamily(for packet: Data) -> NSNumber? {
+        return ipPacketProtocolFamily(for: packet)
+    }
 }
 
 // MARK: - Go Tunnel Config Callback
@@ -389,4 +592,5 @@ class GoTunnelConfigCallback: NSObject, LibtailscaleTunnelConfigCallbackProtocol
         handler(configJSON)
     }
 }
+
 #endif

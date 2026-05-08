@@ -3,6 +3,7 @@ package libtailscale
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/netip"
 	"sync"
 
@@ -16,12 +17,13 @@ import (
 type TunnelConfig struct {
 	// Routes
 	LocalAddresses []string `json:"localAddresses"` // e.g. ["100.64.0.2/32", "fd7a:115c:a1e0::1/128"]
-	Routes         []string `json:"routes"`          // CIDR routes to include
+	Routes         []string `json:"routes"`         // CIDR routes to include
 	ExcludeRoutes  []string `json:"excludeRoutes,omitempty"`
 
 	// DNS
-	DNSServers []string `json:"dnsServers"`
-	DNSDomains []string `json:"dnsDomains"`
+	DNSServers      []string `json:"dnsServers"`
+	DNSDomains      []string `json:"dnsDomains"`
+	DNSMatchDomains []string `json:"dnsMatchDomains,omitempty"`
 
 	// Tunnel
 	MTU int `json:"mtu"`
@@ -29,32 +31,40 @@ type TunnelConfig struct {
 
 // tunnelConfigManager holds the callback to Swift and serializes config updates.
 type tunnelConfigManager struct {
-	mu sync.Mutex
-	cb TunnelConfigCallback
+	mu             sync.Mutex
+	cb             TunnelConfigCallback
+	lastConfigJSON []byte
 }
 
 func (m *tunnelConfigManager) setCallback(cb TunnelConfigCallback) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cb = cb
+	lastConfigJSON := append([]byte(nil), m.lastConfigJSON...)
+
+	if cb != nil && len(lastConfigJSON) > 0 {
+		if err := cb.OnTunnelConfigUpdate(lastConfigJSON); err != nil {
+			log.Printf("replay tunnel config: %v", err)
+		}
+	}
 }
 
 func (m *tunnelConfigManager) onConfigUpdate(rcfg *router.Config, dcfg *dns.OSConfig) error {
-	m.mu.Lock()
-	cb := m.cb
-	m.mu.Unlock()
-
-	if cb == nil {
-		return nil // No callback registered yet
-	}
-
 	if rcfg == nil {
 		// Tunnel being torn down
+		m.mu.Lock()
+		m.lastConfigJSON = nil
+		m.mu.Unlock()
 		return nil
 	}
 
 	tc := TunnelConfig{
-		MTU: rcfg.NewMTU,
+		LocalAddresses:  []string{},
+		Routes:          []string{},
+		DNSServers:      []string{},
+		DNSDomains:      []string{},
+		DNSMatchDomains: []string{},
+		MTU:             rcfg.NewMTU,
 	}
 	if tc.MTU <= 0 {
 		tc.MTU = defaultMTU
@@ -70,10 +80,10 @@ func (m *tunnelConfigManager) onConfigUpdate(rcfg *router.Config, dcfg *dns.OSCo
 		tc.Routes = append(tc.Routes, route.String())
 	}
 
-	// Excluded routes (SubnetRoutes that shouldn't go through tunnel)
-	// On iOS we generally route everything through the tunnel, but we
-	// still pass exclude routes for completeness.
-	// Nothing to exclude for MVP.
+	// Excluded routes (routes that should stay outside the tunnel).
+	for _, route := range rcfg.LocalRoutes {
+		tc.ExcludeRoutes = append(tc.ExcludeRoutes, route.String())
+	}
 
 	// DNS
 	if dcfg != nil {
@@ -82,6 +92,9 @@ func (m *tunnelConfigManager) onConfigUpdate(rcfg *router.Config, dcfg *dns.OSCo
 		}
 		for _, d := range dcfg.SearchDomains {
 			tc.DNSDomains = append(tc.DNSDomains, d.WithoutTrailingDot())
+		}
+		for _, d := range dcfg.MatchDomains {
+			tc.DNSMatchDomains = append(tc.DNSMatchDomains, d.WithoutTrailingDot())
 		}
 	}
 
@@ -102,8 +115,18 @@ func (m *tunnelConfigManager) onConfigUpdate(rcfg *router.Config, dcfg *dns.OSCo
 	if err != nil {
 		return fmt.Errorf("marshal tunnel config: %w", err)
 	}
+	m.mu.Lock()
+	m.lastConfigJSON = append([]byte(nil), configJSON...)
+	cb := m.cb
 
-	return cb.OnTunnelConfigUpdate(configJSON)
+	if cb == nil {
+		m.mu.Unlock()
+		return nil
+	}
+
+	err = cb.OnTunnelConfigUpdate(configJSON)
+	m.mu.Unlock()
+	return err
 }
 
 // setTunnelConfigCallback is called from the exported SetTunnelConfigCallback.

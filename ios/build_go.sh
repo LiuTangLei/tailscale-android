@@ -41,11 +41,18 @@ case "${1:-}" in
         ;;
 esac
 
-# Ensure gomobile and gobind are available
-if ! command -v gomobile &>/dev/null; then
-    echo "gomobile not found. Installing..."
-    go install golang.org/x/mobile/cmd/gomobile@latest
-    go install golang.org/x/mobile/cmd/gobind@latest
+MOBILE_VERSION="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
+GOBIN_DIR="$(go env GOBIN)"
+if [[ -z "$GOBIN_DIR" ]]; then
+    GOBIN_DIR="$(go env GOPATH)/bin"
+fi
+export PATH="$GOBIN_DIR:$PATH"
+
+# Ensure gomobile and gobind are available, pinned to the x/mobile version in go.mod.
+if ! command -v gomobile &>/dev/null || ! command -v gobind &>/dev/null; then
+    echo "gomobile or gobind not found. Installing golang.org/x/mobile ${MOBILE_VERSION}..."
+    go install "golang.org/x/mobile/cmd/gomobile@${MOBILE_VERSION}"
+    go install "golang.org/x/mobile/cmd/gobind@${MOBILE_VERSION}"
 fi
 
 # Initialize gomobile (downloads NDK tools for Android; for iOS it sets up Xcode paths)
@@ -68,3 +75,4 @@ echo "Success: $OUTPUT"
 ls -lh "$OUTPUT"
 echo ""
 echo "Next: add $OUTPUT to the Xcode project's PacketTunnel target (Frameworks, Libraries, and Embedded Content)."
+echo "For TrollStore or real-device testing, build with --device or --all so the xcframework contains ios/arm64."

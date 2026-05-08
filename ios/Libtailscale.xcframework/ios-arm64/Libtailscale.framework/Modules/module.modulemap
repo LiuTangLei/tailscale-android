@@ -1,0 +1,8 @@
+framework module "Libtailscale" {
+	header "ref.h"
+    header "Libtailscale.objc.h"
+    header "Universe.objc.h"
+    header "Libtailscale.h"
+
+    export *
+}

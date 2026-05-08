@@ -20,7 +20,6 @@ type VPNFacade struct {
 	InitialMTU        uint32
 
 	mu        sync.Mutex
-	didSetMTU bool
 	rcfg      *router.Config
 	dcfg      *dns.OSConfig
 }
@@ -32,11 +31,14 @@ func (vf *VPNFacade) Up() error {
 func (vf *VPNFacade) Set(rcfg *router.Config) error {
 	vf.mu.Lock()
 	defer vf.mu.Unlock()
+	if rcfg == nil {
+		vf.rcfg = nil
+		return nil
+	}
 	if vf.rcfg != nil && vf.rcfg.Equal(rcfg) {
 		return nil
 	}
-	if !vf.didSetMTU {
-		vf.didSetMTU = true
+	if rcfg.NewMTU <= 0 && vf.InitialMTU != 0 {
 		rcfg.NewMTU = int(vf.InitialMTU)
 	}
 	vf.rcfg = rcfg
@@ -58,7 +60,7 @@ func (vf *VPNFacade) SetDNS(dcfg dns.OSConfig) error {
 }
 
 func (vf *VPNFacade) SupportsSplitDNS() bool {
-	return false
+	return true
 }
 
 func (vf *VPNFacade) GetBaseConfig() (dns.OSConfig, error) {

@@ -37,8 +37,17 @@ type AppContext interface {
 type Application interface {
 	CallLocalAPI(timeoutMillis int, method, endpoint string, body InputStream) (LocalAPIResponse, error)
 	CallLocalAPIMultipart(timeoutMillis int, method, endpoint string, parts FileParts) (LocalAPIResponse, error)
+	InjectInboundPacket(packet []byte) error
 	NotifyPolicyChanged()
+	SetPacketCallback(cb PacketCallback)
+	Stop()
 	WatchNotifications(mask int, cb NotificationCallback) NotificationManager
+}
+
+// PacketCallback receives packets written by the Go TUN device. The Swift
+// PacketTunnelProvider writes them to NEPacketTunnelFlow.
+type PacketCallback interface {
+	OnPacket(packet []byte) error
 }
 
 // FileParts is an array of multiple FileParts.

@@ -14,6 +14,8 @@ enum GoBridge {
     private(set) static var application: (any LibtailscaleApplicationProtocol)?
     /// Retain the AppContext so it's not deallocated while Go holds a reference.
     private static var appContext: GoAppContext?
+    /// Retain packet callback while Go holds a reference.
+    private static var packetCallback: GoPacketCallback?
 
     /// Start the Go backend. Must be called from the Extension process.
     ///
@@ -24,12 +26,13 @@ enum GoBridge {
     /// - Returns: true if the backend started successfully.
     static func start(dataDir: String, directFileRoot: String, hwAttestation: Bool) -> Bool {
         let appCtx = GoAppContext()
+        appContext = appCtx
         let app = LibtailscaleStart(dataDir, directFileRoot, hwAttestation, appCtx)
         if app != nil {
             application = app
-            appContext = appCtx
             return true
         }
+        appContext = nil
         return false
     }
 
@@ -42,7 +45,7 @@ enum GoBridge {
     static func watchNotifications(mask: Int, callback: @escaping (Data) -> Void) -> NotificationHandle? {
         guard let app = application else { return nil }
         let cb = GoNotificationCallback(callback)
-        let manager = app.watchNotifications(mask, cb: cb)
+        guard let manager = app.watchNotifications(mask, cb: cb) else { return nil }
         let handle = NotificationHandle()
         handle.goManager = manager
         return handle
@@ -74,10 +77,52 @@ enum GoBridge {
         return LocalAPIResponse(statusCode: statusCode, body: bodyData)
     }
 
+    /// Register a packet callback for packets emitted by the Go TUN device.
+    static func setPacketCallback(_ callback: @escaping (Data) -> Void) {
+        guard let app = application else { return }
+        let cb = GoPacketCallback(callback)
+        app.setPacketCallback(cb)
+        packetCallback = cb
+    }
+
+    /// Clear the packet callback registered with Go.
+    static func clearPacketCallback() {
+        application?.setPacketCallback(nil)
+        packetCallback = nil
+    }
+
+    /// Inject a packet read from NEPacketTunnelFlow into the Go TUN device.
+    static func injectInboundPacket(_ packet: Data) throws {
+        guard let app = application else { throw GoBridgeError.startFailed }
+        try app.injectInboundPacket(packet)
+    }
+
     /// Stop watching notifications.
     static func stopNotifications(_ handle: NotificationHandle) {
         handle.goManager?.stop()
         handle.goManager = nil
+    }
+
+    /// Stop the Go backend and release retained bridge objects.
+    static func stopBackend() {
+        application?.stop()
+        packetCallback = nil
+        application = nil
+        appContext = nil
+    }
+}
+
+/// Implements Go's PacketCallback interface.
+class GoPacketCallback: NSObject, LibtailscalePacketCallbackProtocol {
+    private let handler: (Data) -> Void
+
+    init(_ handler: @escaping (Data) -> Void) {
+        self.handler = handler
+    }
+
+    func onPacket(_ packet: Data?) throws {
+        guard let packet = packet else { return }
+        handler(packet)
     }
 }
 
@@ -107,8 +152,25 @@ enum GoBridge {
         throw GoBridgeError.notImplemented
     }
 
+    static func setPacketCallback(_ callback: @escaping (Data) -> Void) {
+        NSLog("[GoBridge] setPacketCallback — stub")
+    }
+
+    static func clearPacketCallback() {
+        NSLog("[GoBridge] clearPacketCallback — stub")
+    }
+
+    static func injectInboundPacket(_ packet: Data) throws {
+        NSLog("[GoBridge] injectInboundPacket(\(packet.count) bytes) — stub")
+        throw GoBridgeError.notImplemented
+    }
+
     static func stopNotifications(_ handle: NotificationHandle) {
         NSLog("[GoBridge] stopNotifications() — stub")
+    }
+
+    static func stopBackend() {
+        NSLog("[GoBridge] stopBackend() — stub")
     }
 }
 #endif

@@ -10,6 +10,7 @@ import (
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -36,6 +37,10 @@ type App struct {
 	dataDir        string
 	directFileRoot string
 	appCtx         AppContext
+	cancel         context.CancelFunc
+	stopOnce       sync.Once
+	mu             sync.Mutex
+	stopped        bool
 
 	store             *stateStore
 	policyStore       *syspolicyStore
@@ -44,7 +49,10 @@ type App struct {
 	localAPIHandler http.Handler
 	backend         *ipnlocal.LocalBackend
 	backendState    *backend // prevent GC; logIDPublicAtomic points into this
-	ready           sync.WaitGroup
+	ready           chan struct{}
+	readyOnce       sync.Once
+	readyErr        error
+	packetCallback  PacketCallback
 	tunnelConfigMgr tunnelConfigManager
 }
 
@@ -84,12 +92,14 @@ func start(dataDir, directFileRoot string, hwAttestationPref bool, appCtx AppCon
 }
 
 func newApp(dataDir, directFileRoot string, hwAttestationPref bool, appCtx AppContext) *App {
+	ctx, cancel := context.WithCancel(context.Background())
 	a := &App{
 		dataDir:        dataDir,
 		directFileRoot: directFileRoot,
 		appCtx:         appCtx,
+		cancel:         cancel,
+		ready:          make(chan struct{}),
 	}
-	a.ready.Add(2) // 1 for localAPIHandler, 1 for lb.Start
 
 	a.store = newStateStore(appCtx)
 	a.policyStore = &syspolicyStore{a: a}
@@ -111,8 +121,11 @@ func newApp(dataDir, directFileRoot string, hwAttestationPref bool, appCtx AppCo
 				panic(p)
 			}
 		}()
-		if err := a.runBackend(context.Background(), hwAttestEnabled); err != nil {
-			log.Printf("fatal error: %v", err)
+		if err := a.runBackend(ctx, hwAttestEnabled); err != nil {
+			a.markReady(err)
+			if err != context.Canceled {
+				log.Printf("fatal error: %v", err)
+			}
 		}
 	}()
 
@@ -130,8 +143,15 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 		return err
 	}
 	a.logIDPublicAtomic.Store(&b.logIDPublic)
+	a.mu.Lock()
+	if a.stopped || ctx.Err() != nil {
+		a.mu.Unlock()
+		a.closeBackendState(b)
+		return context.Canceled
+	}
 	a.backend = b.backend
 	a.backendState = b // prevent GC of backend struct while App is alive
+	a.mu.Unlock()
 	if hardwareAttestation {
 		a.backend.SetHardwareAttested()
 	}
@@ -148,8 +168,6 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 	h.PermitWrite = true
 	a.localAPIHandler = h
 
-	a.ready.Done() // localAPIHandler ready
-
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -159,8 +177,14 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore) (
 	sys.Set(store)
 
 	logf := logger.RusagePrefixLog(log.Printf)
+	tunDev := newPendingTUN()
+	a.mu.Lock()
+	if a.packetCallback != nil {
+		tunDev.SetPacketCallback(a.packetCallback)
+	}
+	a.mu.Unlock()
 	b := &backend{
-		tunDev: newPendingTUN(),
+		tunDev: tunDev,
 		appCtx: appCtx,
 		bus:    sys.Bus.Get(),
 	}
@@ -211,11 +235,13 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore) (
 	if err != nil {
 		return nil, fmt.Errorf("runBackend: NewUserspaceEngine: %v", err)
 	}
+	b.engine = engine
 	sys.Set(engine)
 	b.logIDPublic = logID.Public()
 
 	ns, err := netstack.Create(logf, sys.Tun.Get(), engine, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
+		a.closeBackendState(b)
 		return nil, fmt.Errorf("netstack.Create: %w", err)
 	}
 	sys.Set(ns)
@@ -228,25 +254,26 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore) (
 
 	lb, err := ipnlocal.NewLocalBackend(logf, logID.Public(), sys, 0)
 	if err != nil {
-		engine.Close()
+		a.closeBackendState(b)
 		return nil, fmt.Errorf("runBackend: NewLocalBackend: %v", err)
 	}
+	b.backend = lb
 	if err := ns.Start(lb); err != nil {
+		a.closeBackendState(b)
 		return nil, fmt.Errorf("startNetstack: %w", err)
 	}
 	if b.logger != nil {
 		lb.SetLogFlusher(b.logger.StartFlush)
 	}
-	b.engine = engine
-	b.backend = lb
 	b.sys = sys
 
 	go func() {
 		if err := lb.Start(ipn.Options{}); err != nil {
+			a.markReady(err)
 			log.Printf("Failed to start LocalBackend: %s", err)
 			panic(err)
 		}
-		a.ready.Done() // lb.Start ready
+		a.markReady(nil)
 	}()
 
 	return b, nil
@@ -266,4 +293,95 @@ func (a *App) modelName() string {
 		panic(err)
 	}
 	return m
+}
+
+func (a *App) InjectInboundPacket(packet []byte) error {
+	a.mu.Lock()
+	b := a.backendState
+	a.mu.Unlock()
+	if b == nil || b.tunDev == nil {
+		return os.ErrNotExist
+	}
+	return b.tunDev.InjectInboundPacket(packet)
+}
+
+func (a *App) SetPacketCallback(cb PacketCallback) {
+	a.mu.Lock()
+	a.packetCallback = cb
+	b := a.backendState
+	a.mu.Unlock()
+	if b != nil && b.tunDev != nil {
+		b.tunDev.SetPacketCallback(cb)
+	}
+}
+
+func (a *App) Stop() {
+	a.stopOnce.Do(func() {
+		a.mu.Lock()
+		cancel := a.cancel
+		backend := a.backend
+		backendState := a.backendState
+		a.stopped = true
+		a.backend = nil
+		a.backendState = nil
+		a.mu.Unlock()
+
+		if cancel != nil {
+			cancel()
+		}
+		a.markReady(context.Canceled)
+		if backendState != nil {
+			a.closeBackendState(backendState)
+		} else if backend != nil {
+			backend.Shutdown()
+		}
+	})
+}
+
+func (a *App) closeBackendState(backendState *backend) {
+	if backendState == nil {
+		return
+	}
+	if backendState.backend != nil {
+		backendState.backend.Shutdown()
+	} else if backendState.engine != nil {
+		backendState.engine.Close()
+	}
+	if backendState.tunDev != nil {
+		_ = backendState.tunDev.Close()
+	}
+	if backendState.netMon != nil {
+		_ = backendState.netMon.Close()
+	}
+	if backendState.logger != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = backendState.logger.Shutdown(ctx)
+	}
+}
+
+func (a *App) markReady(err error) {
+	a.readyOnce.Do(func() {
+		a.mu.Lock()
+		if a.ready == nil {
+			a.ready = make(chan struct{})
+		}
+		ready := a.ready
+		a.readyErr = err
+		a.mu.Unlock()
+		close(ready)
+	})
+}
+
+func (a *App) waitReady() error {
+	a.mu.Lock()
+	ready := a.ready
+	a.mu.Unlock()
+	if ready == nil {
+		return os.ErrNotExist
+	}
+	<-ready
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.readyErr
 }
