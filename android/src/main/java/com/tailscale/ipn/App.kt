@@ -314,8 +314,14 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
 
   override fun getOSVersion(): String = Build.VERSION.RELEASE
 
+  override fun getSDKInt(): Long = Build.VERSION.SDK_INT.toLong()
+
   override fun isChromeOS(): Boolean {
     return packageManager.hasSystemFeature("android.hardware.type.pc")
+  }
+
+  override fun isClientLoggingEnabled(): Boolean {
+    return getIsClientLoggingEnabled()
   }
 
   @Serializable
@@ -449,7 +455,51 @@ class App : UninitializedApp(), libtailscale.AppContext, ViewModelStoreOwner {
   override fun hardwareAttestationKeyLoad(id: String) {
     return getKeyStore().load(id)
   }
+
+  override fun bindSocketToNetwork(fd: Int): Boolean {
+    val net =
+        NetworkChangeCallback.cachedDefaultNetwork
+            ?: run {
+              TSLog.d(TAG, "bindSocketToActiveNetwork: no cached default network; noop")
+              return false
+            }
+
+    val iface = NetworkChangeCallback.cachedDefaultInterfaceName
+
+    TSLog.d(
+        TAG,
+        "bindSocketToActiveNetwork: binding fd=$fd to net=$net iface=$iface",
+    )
+
+    return try {
+      android.os.ParcelFileDescriptor.fromFd(fd).use { pfd -> net.bindSocket(pfd.fileDescriptor) }
+      true
+    } catch (e: Exception) {
+      TSLog.w(
+          TAG,
+          "bindSocketToActiveNetwork: bind failed fd=$fd net=$net iface=$iface: $e",
+      )
+      false
+    }
+  }
+
+  override fun getUserCACertsPEM(): ByteArray {
+    val ks = java.security.KeyStore.getInstance("AndroidCAStore")
+    ks.load(null)
+    val sb = StringBuilder()
+    val encoder = android.util.Base64.NO_WRAP
+    for (alias in ks.aliases()) {
+      if (!alias.startsWith("user:")) continue
+      val cert = ks.getCertificate(alias) ?: continue
+      val pem = android.util.Base64.encodeToString(cert.encoded, encoder)
+      sb.append("-----BEGIN CERTIFICATE-----\n")
+      pem.chunked(64).forEach { sb.append(it).append('\n') }
+      sb.append("-----END CERTIFICATE-----\n")
+    }
+    return sb.toString().toByteArray(Charsets.UTF_8)
+  }
 }
+
 /**
  * UninitializedApp contains all of the methods of App that can be used without having to initialize
  * the Go backend. This is useful when you want to access functions on the App without creating side
@@ -473,6 +523,7 @@ open class UninitializedApp : Application() {
     private const val SELECTED_APPS_KEY = "disallowedApps"
     private const val ALLOW_SELECTED_APPS_KEY = "allowSelectedApps"
 
+    private const val IS_CLIENT_LOGGING_ENABLED_KEY = "isClientLoggingEnabled"
     // File for shared preferences that are not encrypted.
     private const val UNENCRYPTED_PREFERENCES = "unencrypted"
     private lateinit var appInstance: UninitializedApp
@@ -535,7 +586,7 @@ open class UninitializedApp : Application() {
     // FLAG_UPDATE_CURRENT ensures that if the intent is already pending, the existing intent will
     // be updated rather than creating multiple redundant instances.
     val pendingIntent =
-        PendingIntent.getService(
+        PendingIntent.getForegroundService(
             this,
             0,
             intent,
@@ -652,6 +703,22 @@ open class UninitializedApp : Application() {
           NotificationCompat.Action.Builder(0, actionLabel, pendingButtonIntent).build())
     }
     return builder.build()
+  }
+
+  fun getIsClientLoggingEnabled(): Boolean {
+
+    // Force client logging to be enabled, when the device is managed by MDM
+    // Later this could become a dedicated MDMSetting / restriction.
+    if (MDMSettings.isMDMConfigured) {
+      return true
+    }
+
+    return getUnencryptedPrefs().getBoolean(IS_CLIENT_LOGGING_ENABLED_KEY, true)
+  }
+
+  fun updateIsClientLoggingEnabled(value: Boolean) {
+    getUnencryptedPrefs().edit().putBoolean(IS_CLIENT_LOGGING_ENABLED_KEY, value).apply()
+    App.get().getLibtailscaleApp().setClientLoggingEnabled(getIsClientLoggingEnabled())
   }
 
   fun updateUserSelectedPackages(packageNames: List<String>) {

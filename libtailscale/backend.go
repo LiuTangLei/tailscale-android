@@ -5,6 +5,7 @@ package libtailscale
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
@@ -58,6 +59,11 @@ type App struct {
 	backend         *ipnlocal.LocalBackend
 	ready           sync.WaitGroup
 	backendMu       sync.Mutex
+
+	// logger is the logtail logger whose uploads follow the user's
+	// IsClientLoggingEnabled preference. Populated once runBackend wires
+	// up the backend; nil before then.
+	logger atomic.Pointer[logtail.Logger]
 }
 
 func start(dataDir, directFileRoot string, hwAttestationPref bool, appCtx AppContext) Application {
@@ -141,6 +147,7 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 		return err
 	}
 	a.logIDPublicAtomic.Store(&b.logIDPublic)
+	a.logger.Store(b.logger)
 	a.backend = b.backend
 	if hardwareAttestation {
 		a.backend.SetHardwareAttested()
@@ -227,6 +234,12 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 				}
 				return nil // even on error. see big TODO above.
 			})
+			netns.SetAndroidBindToNetworkFunc(func(fd int) error {
+				if ok := a.appCtx.BindSocketToNetwork(int32(fd)); !ok {
+					log.Printf("[unexpected] IPNService.bindSocketToNetwork(%d) returned false", fd)
+				}
+				return nil
+			})
 			log.Printf("onVPNRequested: rebind required")
 			// TODO(catzkorn): When we start the android application
 			// we bind sockets before we have access to the VpnService.protect()
@@ -255,6 +268,7 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 				}
 				b.CloseTUNs()
 				netns.SetAndroidProtectFunc(nil)
+				netns.SetAndroidBindToNetworkFunc(nil)
 				vpnService.service = nil
 			}
 		case i := <-onDNSConfigChanged:
@@ -273,6 +287,22 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 
 	sys := tsd.NewSystem()
 	sys.Set(store)
+
+	if pemData, err := appCtx.GetUserCACertsPEM(); err != nil {
+		log.Printf("GetUserCACertsPEM: %v", err)
+	} else if len(pemData) > 0 {
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			log.Printf("x509.SystemCertPool: %v; using empty pool", err)
+			pool = x509.NewCertPool()
+		}
+		if pool.AppendCertsFromPEM(pemData) {
+			sys.ExtraRootCAs = pool
+			log.Printf("loaded user CA certificates into ExtraRootCAs")
+		} else {
+			log.Printf("failed to parse any user CA certificates from PEM data")
+		}
+	}
 
 	logf := logger.RusagePrefixLog(log.Printf)
 	b := &backend{
@@ -302,10 +332,10 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 
 	netMon, err := netmon.New(b.bus, logf)
 	if err != nil {
-		log.Printf("netmon.New: %w", err)
+		log.Printf("netmon.New: %v", err)
 	}
 	b.netMon = netMon
-	b.setupLogs(dataDir, logID, logf, sys.HealthTracker.Get())
+	b.setupLogs(dataDir, logID, logf, sys.HealthTracker.Get(), a.isClientLoggingEnabled())
 	dialer := new(tsdial.Dialer)
 	vf := &VPNFacade{
 		SetBoth:           b.setCfg,

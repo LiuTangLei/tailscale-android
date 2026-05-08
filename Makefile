@@ -13,6 +13,13 @@
 DOCKER_IMAGE := tailscale-android-build-amd64-041425-1
 export TS_USE_TOOLCHAIN=1
 
+# If set, additional comma-separated build tags passed to the libtailscale Go
+# build to control feature selection.
+#
+# As of 2026-04-15, we disable netmap caching on Android until we have UI
+# affordances for debugging it.
+GOMOBILE_BUILD_TAGS := ts_omit_cachenetmap
+
 DEBUG_APK := tailscale-debug.apk
 RELEASE_AAB := tailscale-release.aab
 RELEASE_TV_AAB := tailscale-tv-release.aab
@@ -193,7 +200,7 @@ build-unstripped-aar: tailscale.version $(GOBIN)/gomobile
 	# The -linkmode=external -extldflags=-Wl,-z,max-page-size=16384 is specific to NDK 23
 	# to support 16kb page sizes.  Your mileage may vary with other NDK versions.
 	GOFLAGS='-mod=mod' $(GOBIN)/gomobile bind -target android -androidapi 26 \
-		-tags "$$(./build-tags.sh)" \
+		-tags "$$(./build-tags.sh) $(GOMOBILE_BUILD_TAGS)" \
 		-ldflags "-linkmode=external -extldflags=-Wl,-z,max-page-size=16384 $$(./version-ldflags.sh)" \
 		-o $(ABS_UNSTRIPPED_AAR) ./libtailscale || { echo "gomobile bind failed"; exit 1; }
 	@if [ ! -f $(ABS_UNSTRIPPED_AAR) ]; then \
@@ -321,6 +328,10 @@ checkandroidsdk: ## Check that Android SDK is installed
 		\tANDROID_SDK_ROOT=$(ANDROID_SDK_ROOT)\n\n\
 		See README.md for instructions on how to install the prerequisites.\n"; exit 1)
 
+.PHONY: go-test
+go-test: ## Run the Go tests (excludes packages requiring Android NDK)
+	./tool/go test $$(./tool/go list ./... | grep -v '^github.com/tailscale/tailscale-android/libtailscale$$')
+
 .PHONY: test
 test: gradle-dependencies ## Run the Android tests
 	(cd android && ./gradlew test)
@@ -364,9 +375,28 @@ docker-build-image: ## Builds the docker image for the android build environment
 		docker build -f docker/DockerFile.amd64-build -t $(DOCKER_IMAGE) .; \
 	fi
 
+# DOCKER_ANDROID_DIR is bind-mounted as /root/.android inside the container
+# so the Gradle-generated debug keystore (and anything else under ~/.android)
+# persists across docker runs. Without this, every docker-based debug build
+# gets a fresh debug.keystore and a different signing cert, so `adb install -r`
+# can't update a prior install. Mount target is /root/.android because the
+# JVM's user.home resolves to /root for the container's root user, regardless
+# of the Dockerfile's HOME=/build env.
+DOCKER_ANDROID_DIR := $(CURDIR)/.android-docker
+
+.PHONY: docker-android-dir
+docker-android-dir:
+	@mkdir -p $(DOCKER_ANDROID_DIR)
+
+DOCKER_RUN_VOLS := -v $(CURDIR):/build/tailscale-android -v $(DOCKER_ANDROID_DIR):/root/.android
+
 .PHONY: docker-run-build
-docker-run-build: clean jarsign-env docker-build-image ## Runs the docker image for the android build environment and builds release
-	@docker run --rm -v $(CURDIR):/build/tailscale-android --env JKS_PASSWORD=$(JKS_PASSWORD) --env JKS_PATH=$(JKS_PATH) $(DOCKER_IMAGE)
+docker-run-build: clean jarsign-env docker-build-image docker-android-dir ## Runs the docker image for the android build environment and builds release
+	@docker run --rm $(DOCKER_RUN_VOLS) --env JKS_PASSWORD=$(JKS_PASSWORD) --env JKS_PATH=$(JKS_PATH) $(DOCKER_IMAGE)
+
+.PHONY: docker-tailscale-debug
+docker-tailscale-debug: docker-build-image docker-android-dir ## Build tailscale-debug.apk inside the docker env (stable signer across runs)
+	@docker run --rm $(DOCKER_RUN_VOLS) $(DOCKER_IMAGE) make tailscale-debug
 
 .PHONY: docker-remove-build-image
 docker-remove-build-image: ## Removes the current docker build image
@@ -376,8 +406,8 @@ docker-remove-build-image: ## Removes the current docker build image
 docker-all: docker-build-image docker-run-build $(DOCKER_IMAGE)
 
 .PHONY: docker-shell
-docker-shell: docker-build-image ## Builds a docker image with the android build env and opens a shell
-	docker run --rm -v $(CURDIR):/build/tailscale-android -it $(DOCKER_IMAGE) /bin/bash
+docker-shell: docker-build-image docker-android-dir ## Builds a docker image with the android build env and opens a shell
+	docker run --rm $(DOCKER_RUN_VOLS) -it $(DOCKER_IMAGE) /bin/bash
 
 .PHONY: docker-remove-shell-image
 docker-remove-shell-image: ## Removes all docker shell image
