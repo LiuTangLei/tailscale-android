@@ -36,6 +36,9 @@ type AppContext interface {
 	// GetOSVersion gets the Android version.
 	GetOSVersion() (string, error)
 
+	// GetSDKInt returns the Android SDK_INT (android.os.Build.VERSION.SDK_INT).
+	GetSDKInt() (int, error)
+
 	// GetDeviceName gets the Android device's user-set name, or hardware model name as a fallback.
 	GetDeviceName() (string, error)
 
@@ -47,6 +50,9 @@ type AppContext interface {
 
 	// IsChromeOS reports whether we're on a ChromeOS device.
 	IsChromeOS() (bool, error)
+
+	// IsClientLoggingEnabled reports whether the user has enabled remote client logging.
+	IsClientLoggingEnabled() (bool, error)
 
 	// GetInterfacesAsJson gets a JSON representation of all network
 	// interfaces.
@@ -74,6 +80,12 @@ type AppContext interface {
 	HardwareAttestationKeyPublic(id string) (pub []byte, err error)
 	HardwareAttestationKeySign(id string, data []byte) (sig []byte, err error)
 	HardwareAttestationKeyLoad(id string) error
+
+	BindSocketToNetwork(fd int32) bool
+
+	// GetUserCACertsPEM returns PEM-encoded user-installed CA certificates
+	// from the Android KeyStore, or empty bytes if none are installed.
+	GetUserCACertsPEM() ([]byte, error)
 }
 
 // IPNService corresponds to our IPNService in Java.
@@ -128,6 +140,10 @@ type Application interface {
 	// NotifyPolicyChanged notifies the backend about a changed MDM policy,
 	// so it can re-read it via the [syspolicyHandler].
 	NotifyPolicyChanged()
+
+	// SetClientLoggingEnabled sets whether diagnostic logs are uploaded to
+	// Tailscale's logging backend. Changes take effect immediately.
+	SetClientLoggingEnabled(enabled bool)
 
 	// WatchNotifications provides a mechanism for subscribing to ipn.Notify
 	// updates. The given NotificationCallback's OnNotify function is invoked

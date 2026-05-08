@@ -3,7 +3,6 @@
 
 package com.tailscale.ipn.ui.view
 
-import android.os.Build
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -100,9 +99,7 @@ fun ExitNodePicker(
           }
         }
 
-        // https://developer.android.com/reference/android/net/VpnService.Builder#excludeRoute(android.net.IpPrefix) - excludeRoute is only supported in API 33+, so don't show the option if allow LAN access is not enabled.
-        if (!allowLanAccessMDMDisposition.value.hiddenFromUser &&
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (!allowLanAccessMDMDisposition.value.hiddenFromUser) {
           item(key = "allowLANAccess") {
             Lists.SectionDivider()
 
