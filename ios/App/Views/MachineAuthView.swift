@@ -129,27 +129,11 @@ struct MachineAuthView: View {
     }
     
     private func loadDeviceInfo() {
-        guard let vpn = appState.vpnManager else { return }
-        
         Task {
-            do {
-                let resp = try await vpn.callLocalAPI(method: "GET", endpoint: "/localapi/v0/status")
-                
-                guard resp.statusCode == 200,
-                      let bodyB64 = resp.bodyBase64,
-                      let bodyData = Data(base64Encoded: bodyB64) else { return }
-                
-                if let json = try JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
-                   let selfStatus = json["Self"] as? [String: Any] {
-                    await MainActor.run {
-                        deviceInfo = DeviceAuthInfo(
-                            hostname: selfStatus["HostName"] as? String ?? "Unknown",
-                            nodeKey: selfStatus["PublicKey"] as? String
-                        )
-                    }
+            if let info = await appState.loadMachineAuthDeviceInfo() {
+                await MainActor.run {
+                    deviceInfo = DeviceAuthInfo(hostname: info.hostname, nodeKey: info.nodeKey)
                 }
-            } catch {
-                // Best effort
             }
         }
     }
@@ -159,11 +143,8 @@ struct MachineAuthView: View {
             while isPolling && pollCount < maxPolls {
                 pollCount += 1
                 
-                // Check if state has changed
-                appState.loadSharedState()
-                
-                // If we're no longer in NeedsMachineAuth, stop polling
-                if appState.ipnState != .needsMachineAuth {
+                let approved = await appState.refreshMachineAuthStatus()
+                if approved {
                     await MainActor.run {
                         isPolling = false
                     }

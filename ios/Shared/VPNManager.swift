@@ -12,6 +12,11 @@ import NetworkExtension
 @MainActor
 class VPNManager: ObservableObject {
     @Published var vpnStatus: NEVPNStatus = .invalid
+    @Published var lastError: String?
+
+    var isTunnelActive: Bool {
+        vpnStatus == .connected || vpnStatus == .connecting || vpnStatus == .reasserting
+    }
 
     private var manager: NETunnelProviderManager?
     private var statusObserver: NSObjectProtocol?
@@ -34,7 +39,7 @@ class VPNManager: ObservableObject {
     func loadManager() async {
         do {
             let managers = try await NETunnelProviderManager.loadAllFromPreferences()
-            if let existing = managers.first {
+            if let existing = managers.first(where: isTailscaleManager) ?? managers.first {
                 manager = existing
             } else {
                 manager = createManager()
@@ -44,6 +49,27 @@ class VPNManager: ObservableObject {
         } catch {
             NSLog("Failed to load VPN managers: \(error)")
         }
+    }
+
+    func refreshStatus() async -> NEVPNStatus {
+        if manager == nil {
+            await loadManager()
+        } else if let manager = manager {
+            do {
+                try await manager.loadFromPreferences()
+                observeStatus()
+            } catch {
+                NSLog("Failed to refresh VPN manager: \(error)")
+            }
+        }
+
+        vpnStatus = manager?.connection.status ?? .invalid
+        return vpnStatus
+    }
+
+    private func isTailscaleManager(_ manager: NETunnelProviderManager) -> Bool {
+        guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else { return false }
+        return proto.providerBundleIdentifier == "com.tailscale.ipn.ios.network-extension"
     }
 
     private func createManager() -> NETunnelProviderManager {
@@ -74,15 +100,30 @@ class VPNManager: ObservableObject {
     func connect() {
         Task {
             do {
-                if manager == nil || vpnStatus == .invalid {
-                    await loadManager()
-                }
-                try await installVPNConfiguration()
-                try manager?.connection.startVPNTunnel()
+                try await connectTunnel()
             } catch {
+                lastError = error.localizedDescription
                 NSLog("Failed to start VPN: \(error)")
             }
         }
+    }
+
+    func connectTunnel() async throws {
+        lastError = nil
+
+        if manager == nil || vpnStatus == .invalid {
+            await loadManager()
+        }
+
+        switch vpnStatus {
+        case .connected, .connecting, .reasserting:
+            return
+        default:
+            break
+        }
+
+        try await installVPNConfiguration()
+        try manager?.connection.startVPNTunnel()
     }
 
     func disconnect() {
@@ -156,12 +197,14 @@ enum VPNError: Error, LocalizedError {
     case noSession
     case sendFailed
     case noManager
+    case backendNotReady(String)
 
     var errorDescription: String? {
         switch self {
         case .noSession: return "No active VPN session"
         case .sendFailed: return "Failed to send message to Extension"
         case .noManager: return "VPN manager not configured"
+        case .backendNotReady(let message): return "VPN backend did not become ready: \(message)"
         }
     }
 }

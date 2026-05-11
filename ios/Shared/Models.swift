@@ -258,6 +258,11 @@ struct PeerNode: Identifiable {
     let keyExpiry: String?
     let isExitNode: Bool
 
+    private static func displayName(from name: String?) -> String {
+        guard let name = name, !name.isEmpty else { return "Unknown" }
+        return name.hasSuffix(".") ? String(name.dropLast()) : name
+    }
+
     /// Normalized hostname for AWG peer matching (lowercase, no domain suffix).
     var normalizedHostname: String {
         hostname.trimmingCharacters(in: .whitespaces)
@@ -269,7 +274,7 @@ struct PeerNode: Identifiable {
     init(from node: NetworkMap.NodeData, isSelf: Bool, userProfile: LoginProfile.UserProfile?) {
         self.id = node.id
         self.nodeKey = node.Key
-        self.displayName = node.Name?.replacingOccurrences(of: ".$", with: "", options: .regularExpression) ?? "Unknown"
+        self.displayName = Self.displayName(from: node.Name)
         self.hostname = node.Name ?? ""
         self.addresses = node.Addresses ?? []
         self.online = node.Online ?? false

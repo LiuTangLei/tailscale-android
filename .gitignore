@@ -46,6 +46,11 @@ tailscale.jks
 # Debug symbols
 *.debug
 
+# iOS build and test artifacts
+ios/build/
+ios/*.xcresult
+ios/*.log
+
 libtailscale.aar
 libtailscale-sources.jar
 .DS_Store

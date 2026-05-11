@@ -16,7 +16,64 @@ import os
 class GoAppContext: NSObject, LibtailscaleAppContextProtocol {
 
     private let logger = Logger(subsystem: "com.tailscale.ipn.ios", category: "go")
-    private let keychainGroup = IPCConstants.keychainGroupID
+    private let keychainGroups = GoAppContext.keychainGroupCandidates()
+    private let fallbackPreferences = sharedDefaults ?? UserDefaults.standard
+
+    private static func keychainGroupCandidates() -> [String?] {
+        let baseGroup = IPCConstants.keychainGroupID
+        return ["TROLLSTORE.\(baseGroup)", baseGroup, nil]
+    }
+
+    private static func withAccessGroup(_ keychainGroup: String?, query: [String: Any]) -> [String: Any] {
+        var query = query
+        if let keychainGroup = keychainGroup {
+            query[kSecAttrAccessGroup as String] = keychainGroup
+        }
+        return query
+    }
+
+    static func clearPersistedState() {
+        let persistentKeys = persistedStateKeys()
+        let preferences = sharedDefaults ?? UserDefaults.standard
+
+        for key in persistentKeys {
+            preferences.removeObject(forKey: key)
+        }
+
+        for key in preferences.dictionaryRepresentation().keys where isPersistedStateKey(key) {
+            preferences.removeObject(forKey: key)
+        }
+
+        for keychainGroup in keychainGroupCandidates() {
+            let query = withAccessGroup(keychainGroup, query: [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecReturnAttributes as String: true,
+                kSecMatchLimit as String: kSecMatchLimitAll,
+            ])
+
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            guard status == errSecSuccess, let items = result as? [[String: Any]] else { continue }
+
+            for item in items {
+                guard let account = item[kSecAttrAccount as String] as? String,
+                      isPersistedStateKey(account) else { continue }
+                let deleteQuery = withAccessGroup(keychainGroup, query: [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrAccount as String: account,
+                ])
+                SecItemDelete(deleteQuery as CFDictionary)
+            }
+        }
+    }
+
+    private static func persistedStateKeys() -> [String] {
+        ["privatelogid"]
+    }
+
+    private static func isPersistedStateKey(_ key: String) -> Bool {
+        key.hasPrefix("statestore-") || persistedStateKeys().contains(key)
+    }
 
     // MARK: - Logging
 
@@ -29,70 +86,109 @@ class GoAppContext: NSObject, LibtailscaleAppContextProtocol {
     func encrypt(toPref key: String?, value: String?) throws {
         guard let key = key, let value = value else { return }
         let data = Data(value.utf8)
+        var lastStatus: OSStatus = errSecSuccess
+        var sawMissingEntitlement = false
 
-        // Delete existing item first to avoid errSecDuplicateItem
-        let deleteQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
-            kSecAttrAccessGroup as String: keychainGroup,
-        ]
-        let delStatus = SecItemDelete(deleteQuery as CFDictionary)
-        if delStatus != errSecSuccess && delStatus != errSecItemNotFound {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(delStatus))
+        for keychainGroup in keychainGroups {
+            // Delete existing item first to avoid errSecDuplicateItem
+            let deleteQuery = GoAppContext.withAccessGroup(keychainGroup, query: [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: key,
+            ])
+            let delStatus = SecItemDelete(deleteQuery as CFDictionary)
+            if delStatus != errSecSuccess && delStatus != errSecItemNotFound {
+                if delStatus == errSecMissingEntitlement {
+                    sawMissingEntitlement = true
+                }
+                lastStatus = delStatus
+                continue
+            }
+
+            let addQuery = GoAppContext.withAccessGroup(keychainGroup, query: [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: key,
+                kSecValueData as String: data,
+                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            ])
+
+            let status = SecItemAdd(addQuery as CFDictionary, nil)
+            if status == errSecSuccess {
+                fallbackPreferences.set(value, forKey: key)
+                return
+            }
+            if status == errSecMissingEntitlement {
+                sawMissingEntitlement = true
+            }
+            lastStatus = status
         }
 
-        let addQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
-            kSecAttrAccessGroup as String: keychainGroup,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
-        ]
-
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
-        if status != errSecSuccess {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        if sawMissingEntitlement {
+            fallbackPreferences.set(value, forKey: key)
+            return
         }
+
+        throw NSError(domain: NSOSStatusErrorDomain, code: Int(lastStatus))
     }
 
     func decrypt(fromPref key: String?, error: NSErrorPointer) -> String {
         guard let key = key else { return "" }
 
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
-            kSecAttrAccessGroup as String: keychainGroup,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound { return "" }
-        if status != errSecSuccess {
-            error?.pointee = NSError(domain: NSOSStatusErrorDomain, code: Int(status))
-            return ""
+        if let fallbackValue = fallbackPreferences.string(forKey: key) {
+            return fallbackValue
         }
-        guard let data = result as? Data else { return "" }
-        return String(data: data, encoding: .utf8) ?? ""
+
+        var lastStatus: OSStatus = errSecItemNotFound
+        var sawItemNotFound = false
+        var sawMissingEntitlement = false
+
+        for keychainGroup in keychainGroups {
+            let query = GoAppContext.withAccessGroup(keychainGroup, query: [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: key,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+            ])
+
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            if status == errSecSuccess, let data = result as? Data {
+                return String(data: data, encoding: .utf8) ?? ""
+            }
+            if status == errSecItemNotFound {
+                sawItemNotFound = true
+            } else if status == errSecMissingEntitlement {
+                sawMissingEntitlement = true
+            } else {
+                lastStatus = status
+            }
+        }
+
+        if !sawItemNotFound && !sawMissingEntitlement {
+            error?.pointee = NSError(domain: NSOSStatusErrorDomain, code: Int(lastStatus))
+        }
+        return ""
     }
 
     func getStateStoreKeysJSON() -> String {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccessGroup as String: keychainGroup,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-        ]
+        var allItems: [[String: Any]] = []
+        for keychainGroup in keychainGroups {
+            let query = GoAppContext.withAccessGroup(keychainGroup, query: [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecReturnAttributes as String: true,
+                kSecMatchLimit as String: kSecMatchLimitAll,
+            ])
 
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let items = result as? [[String: Any]] else {
-            return "[]"
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            if status == errSecSuccess, let items = result as? [[String: Any]] {
+                allItems.append(contentsOf: items)
+            }
         }
 
         let prefix = "statestore-"
-        let keys = items.compactMap { $0[kSecAttrAccount as String] as? String }
+        let keychainKeys = allItems.compactMap { $0[kSecAttrAccount as String] as? String }
+        let fallbackKeys = fallbackPreferences.dictionaryRepresentation().keys
+        let keys = Set(keychainKeys + Array(fallbackKeys))
             .filter { $0.hasPrefix(prefix) }
             .map { String($0.dropFirst(prefix.count)) }
 
@@ -576,3 +672,9 @@ class DataInputStream: NSObject, LibtailscaleInputStreamProtocol {
 }
 
 #endif // canImport(Libtailscale)
+
+func clearPersistedGoState() {
+    #if canImport(Libtailscale)
+    GoAppContext.clearPersistedState()
+    #endif
+}

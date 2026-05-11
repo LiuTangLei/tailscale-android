@@ -6,7 +6,14 @@ import (
 
 // Start starts the iOS libtailscale runtime.
 func Start(dataDir, directFileRoot string, hwAttestationPref bool, appCtx AppContext) Application {
-	return start(dataDir, directFileRoot, hwAttestationPref, appCtx)
+	return start(dataDir, directFileRoot, hwAttestationPref, false, appCtx)
+}
+
+// StartAppLogin starts the iOS libtailscale runtime for app-process login.
+// The app process is not the packet tunnel provider, so it should not bind
+// control-plane sockets to a Darwin interface as the extension backend does.
+func StartAppLogin(dataDir, directFileRoot string, appCtx AppContext) Application {
+	return start(dataDir, directFileRoot, false, true, appCtx)
 }
 
 // AppContext provides the platform hooks implemented on the Swift side.

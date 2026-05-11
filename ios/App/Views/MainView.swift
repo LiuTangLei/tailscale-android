@@ -11,6 +11,21 @@ struct MainView: View {
         return appState.peers.first { $0.id == exitID }
     }
 
+    private var vpnIsActive: Bool {
+        vpnManager.vpnStatus == .connected || vpnManager.vpnStatus == .connecting || vpnManager.vpnStatus == .reasserting
+    }
+
+    private var connectionTitle: String {
+        switch vpnManager.vpnStatus {
+        case .connected:
+            return "Connected"
+        case .connecting, .reasserting:
+            return "Connecting"
+        default:
+            return "Disconnected"
+        }
+    }
+
     var body: some View {
         NavigationView {
             List {
@@ -18,7 +33,7 @@ struct MainView: View {
                 Section {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(appState.ipnState.displayName)
+                            Text(connectionTitle)
                                 .font(.headline)
                             if let selfNode = appState.selfNode {
                                 Text(selfNode.addresses.first ?? "")
@@ -28,7 +43,7 @@ struct MainView: View {
                         }
                         Spacer()
                         Toggle("", isOn: Binding(
-                            get: { appState.ipnState == .running },
+                            get: { vpnIsActive },
                             set: { enabled in
                                 appState.setWantRunning(enabled)
                             }
@@ -38,7 +53,7 @@ struct MainView: View {
                 }
 
                 // Exit Node section
-                if appState.ipnState == .running {
+                if vpnIsActive {
                     Section {
                         NavigationLink(destination: ExitNodeView()) {
                             HStack {
@@ -124,7 +139,7 @@ struct MainView: View {
 
                 // Peer list
                 Section("Devices") {
-                    if appState.peers.isEmpty && appState.ipnState == .running {
+                    if appState.peers.isEmpty {
                         Text("No other devices found")
                             .foregroundColor(.secondary)
                     }
@@ -144,14 +159,13 @@ struct MainView: View {
                 }
             }
             .onAppear {
-                if appState.ipnState == .running {
-                    appState.loadAwgStatusIfNeeded()
-                }
+                appState.loadAwgStatusIfNeeded()
             }
-            .onChange(of: appState.ipnState) { state in
-                if state == .running {
-                    appState.loadAwgStatusIfNeeded()
-                }
+            .onChange(of: vpnManager.vpnStatus) { _ in
+                appState.loadAwgStatusIfNeeded()
+            }
+            .onChange(of: appState.peers.count) { _ in
+                appState.loadAwgStatusIfNeeded()
             }
         }
     }
@@ -162,11 +176,7 @@ struct PeerRow: View {
     @ObservedObject var appState: AppState
 
     private var hasAwgConfig: Bool {
-        if peer.isCurrentDevice {
-            return appState.localAwgStatus
-        }
-        let key = peer.normalizedHostname
-        return appState.awgPeersStatus[key] == true
+        appState.peerHasAwgConfig(peer)
     }
 
     private var isSyncing: Bool {
@@ -204,8 +214,8 @@ struct PeerRow: View {
 
             Spacer()
 
-            // AWG sync button (only for remote peers with AWG config)
-            if hasAwgConfig && !peer.isCurrentDevice {
+            // AWG sync button (available for remote peers; backend reports if no AWG config exists)
+            if !peer.isCurrentDevice {
                 Button {
                     appState.syncAwgConfigFromPeer(peer)
                 } label: {

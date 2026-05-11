@@ -251,6 +251,13 @@ FOUNDATION_EXPORT void LibtailscaleSetTunnelConfigCallback(id<LibtailscaleApplic
  */
 FOUNDATION_EXPORT id<LibtailscaleApplication> _Nullable LibtailscaleStart(NSString* _Nullable dataDir, NSString* _Nullable directFileRoot, BOOL hwAttestationPref, id<LibtailscaleAppContext> _Nullable appCtx);
 
+/**
+ * StartAppLogin starts the iOS libtailscale runtime for app-process login.
+The app process is not the packet tunnel provider, so it should not bind
+control-plane sockets to a Darwin interface as the extension backend does.
+ */
+FOUNDATION_EXPORT id<LibtailscaleApplication> _Nullable LibtailscaleStartAppLogin(NSString* _Nullable dataDir, NSString* _Nullable directFileRoot, id<LibtailscaleAppContext> _Nullable appCtx);
+
 @class LibtailscaleAppContext;
 
 @class LibtailscaleApplication;

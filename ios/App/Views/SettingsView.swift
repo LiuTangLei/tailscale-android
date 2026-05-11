@@ -102,8 +102,7 @@ struct SettingsView: View {
 
                 // AWG refresh button
                 Button {
-                    appState.loadAwgPeersStatus()
-                    appState.loadLocalAwgStatus()
+                    appState.refreshAwgStatus()
                 } label: {
                     HStack {
                         Image(systemName: "arrow.clockwise")

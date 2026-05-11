@@ -5,39 +5,38 @@ import AuthenticationServices
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var vpnManager: VPNManager
-    @State private var showingSafari = false
 
     var body: some View {
         Group {
-            switch appState.ipnState {
-            case .noState, .needsLogin:
-                LoginView()
-            case .needsMachineAuth:
+            if appState.isAwaitingMachineAuth || appState.ipnState == .needsMachineAuth {
                 MachineAuthView()
-            default:
-                MainView()
+            } else if appState.isLoggingIn {
+                LoginView()
+            } else {
+                switch appState.ipnState {
+                case .noState, .needsLogin:
+                    LoginView()
+                default:
+                    MainView()
+                }
             }
         }
-        // When Go backend sends BrowseToURL, open Safari for login
-        .onChange(of: appState.browseToURL) { url in
-            if url != nil {
-                showingSafari = true
+        .sheet(isPresented: Binding(
+            get: { appState.isLoggingIn && appState.browseToURL != nil },
+            set: { presented in
+                if !presented && appState.isLoggingIn {
+                    appState.loginBrowserDidDismiss()
+                }
             }
-        }
-        // Dismiss Safari when login finishes (LoginFinished clears browseToURL)
-        .onChange(of: appState.isLoggingIn) { loggingIn in
-            if !loggingIn && showingSafari {
-                showingSafari = false
-            }
-        }
-        .sheet(isPresented: $showingSafari, onDismiss: {
-            // User closed the browser manually
+        ), onDismiss: {
             if appState.isLoggingIn {
-                appState.isLoggingIn = false
+                appState.loginBrowserDidDismiss()
             }
         }) {
             if let urlStr = appState.browseToURL, let url = URL(string: urlStr) {
-                SafariView(url: url)
+                SafariView(url: url) {
+                    appState.cancelLogin()
+                }
             }
         }
     }
@@ -48,14 +47,32 @@ struct ContentView: View {
 /// Notify.LoginFinished from the Go backend, NOT by a URL callback.
 struct SafariView: UIViewControllerRepresentable {
     let url: URL
+    let onFinish: () -> Void
 
     func makeUIViewController(context: Context) -> SFSafariViewController {
         let vc = SFSafariViewController(url: url)
         vc.preferredControlTintColor = .systemBlue
+        vc.delegate = context.coordinator
         return vc
     }
 
     func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onFinish: onFinish)
+    }
+
+    final class Coordinator: NSObject, SFSafariViewControllerDelegate {
+        let onFinish: () -> Void
+
+        init(onFinish: @escaping () -> Void) {
+            self.onFinish = onFinish
+        }
+
+        func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
+            onFinish()
+        }
+    }
 }
 
 struct ContentView_Previews: PreviewProvider {

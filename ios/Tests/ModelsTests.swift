@@ -125,6 +125,27 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(netMap.Domain, "example.com")
     }
 
+    func testPeerDisplayNameOnlyRemovesTrailingDot() {
+        let peer = PeerNode(
+            from: .init(
+                ID: 1,
+                StableID: "stable-1",
+                Key: nil,
+                Name: "server",
+                Addresses: [],
+                Online: true,
+                OS: nil,
+                UserID: nil,
+                KeyExpiry: nil,
+                IsExitNode: nil
+            ),
+            isSelf: false,
+            userProfile: nil
+        )
+
+        XCTAssertEqual(peer.displayName, "server")
+    }
+
     // MARK: - Health
 
     func testDecodeHealthState() throws {

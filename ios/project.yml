@@ -22,6 +22,9 @@ targets:
       - target: PacketTunnel
         embed: true
         codeSign: true
+      # The app process uses Libtailscale for login before the VPN tunnel is enabled.
+      - framework: Libtailscale.xcframework
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tailscale.ipn.ios

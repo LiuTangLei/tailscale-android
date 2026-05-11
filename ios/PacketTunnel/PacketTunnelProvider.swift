@@ -35,12 +35,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         logger.log("startTunnel: beginning")
         resetTunnelLifecycleState()
+        sharedDefaults?.removeObject(forKey: IPCConstants.keyLastError)
+        writeSharedState(ipnState: 4) // IpnState.starting
 
         // 1. Determine data directory inside App Group container
         guard let containerURL = sharedContainerURL else {
-            let err = NSError(domain: "PacketTunnel", code: 1,
-                              userInfo: [NSLocalizedDescriptionKey: "No App Group container"])
-            completionHandler(err)
+            completeStartWithError("No App Group container", code: 1, completionHandler: completionHandler)
             return
         }
 
@@ -53,9 +53,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             try FileManager.default.createDirectory(atPath: directFileRoot, withIntermediateDirectories: true)
         } catch {
             logger.error("startTunnel: failed to create directories: \(error.localizedDescription)")
-            let err = NSError(domain: "PacketTunnel", code: 3,
-                              userInfo: [NSLocalizedDescriptionKey: "Failed to create data directories: \(error.localizedDescription)"])
-            completionHandler(err)
+            completeStartWithError(
+                "Failed to create data directories: \(error.localizedDescription)",
+                code: 3,
+                completionHandler: completionHandler
+            )
             return
         }
 
@@ -63,9 +65,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let started = GoBridge.start(dataDir: dataDir, directFileRoot: directFileRoot, hwAttestation: false)
         if !started {
             logger.error("startTunnel: Go backend failed to start")
-            let err = NSError(domain: "PacketTunnel", code: 2,
-                              userInfo: [NSLocalizedDescriptionKey: "Go backend start failed"])
-            completionHandler(err)
+            completeStartWithError("Go backend start failed", code: 2, completionHandler: completionHandler)
             return
         }
         logger.log("startTunnel: Go backend started")
@@ -90,9 +90,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }) else {
             logger.error("startTunnel: failed to watch Go backend notifications")
             cleanupStartedBackend()
-            let err = NSError(domain: "PacketTunnel", code: 4,
-                              userInfo: [NSLocalizedDescriptionKey: "Go backend did not become ready"])
-            completionHandler(err)
+            completeStartWithError("Go backend did not become ready", code: 4, completionHandler: completionHandler)
             return
         }
         self.notifyHandle = notifyHandle
@@ -104,6 +102,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         enqueueTunnelSettingsUpdate(settings) { [weak self] error in
             if let error = error {
                 self?.logger.error("startTunnel: setTunnelNetworkSettings failed: \(error.localizedDescription)")
+                self?.publishLastError("setTunnelNetworkSettings failed: \(error.localizedDescription)")
                 completionHandler(error)
                 return
             }
@@ -311,6 +310,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func handleNotification(_ data: Data) {
         do {
             let notify = try JSONDecoder().decode(IpnNotify.self, from: data)
+            sharedDefaults?.removeObject(forKey: IPCConstants.keyLastError)
 
             if let stateInt = notify.State {
                 writeSharedState(ipnState: stateInt)
@@ -354,6 +354,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     // MARK: - Shared State
+
+    private func completeStartWithError(_ message: String,
+                                        code: Int,
+                                        completionHandler: @escaping (Error?) -> Void) {
+        logger.error("startTunnel failed: \(message, privacy: .public)")
+        publishLastError(message)
+        let err = NSError(domain: "PacketTunnel", code: code,
+                          userInfo: [NSLocalizedDescriptionKey: message])
+        completionHandler(err)
+    }
+
+    private func publishLastError(_ message: String) {
+        sharedDefaults?.set(message, forKey: IPCConstants.keyLastError)
+        postDarwinNotification(IPCConstants.notifyStateChanged)
+    }
 
     private func writeSharedState(ipnState: Int) {
         sharedDefaults?.set(ipnState, forKey: IPCConstants.keyIPNState)

@@ -24,10 +24,12 @@ enum GoBridge {
     ///   - directFileRoot: Directory for Taildrop files (can be empty for MVP).
     ///   - hwAttestation: Whether hardware attestation is enabled.
     /// - Returns: true if the backend started successfully.
-    static func start(dataDir: String, directFileRoot: String, hwAttestation: Bool) -> Bool {
+    static func start(dataDir: String, directFileRoot: String, hwAttestation: Bool, appLogin: Bool = false) -> Bool {
         let appCtx = GoAppContext()
         appContext = appCtx
-        let app = LibtailscaleStart(dataDir, directFileRoot, hwAttestation, appCtx)
+        let app = appLogin
+            ? LibtailscaleStartAppLogin(dataDir, directFileRoot, appCtx)
+            : LibtailscaleStart(dataDir, directFileRoot, hwAttestation, appCtx)
         if app != nil {
             application = app
             return true
@@ -48,6 +50,7 @@ enum GoBridge {
         guard let manager = app.watchNotifications(mask, cb: cb) else { return nil }
         let handle = NotificationHandle()
         handle.goManager = manager
+        handle.goCallback = cb
         return handle
     }
 
@@ -63,7 +66,8 @@ enum GoBridge {
         timeoutMillis: Int,
         method: String,
         endpoint: String,
-        body: Data? = nil
+        body: Data? = nil,
+        readBody: Bool = true
     ) async throws -> LocalAPIResponse {
         guard let app = application else { throw GoBridgeError.startFailed }
 
@@ -72,7 +76,7 @@ enum GoBridge {
         let goResp = try app.callLocalAPI(timeoutMillis, method: method, endpoint: endpoint, body: inputStream)
 
         let statusCode = goResp.statusCode()
-        let bodyData = try goResp.bodyBytes()
+        let bodyData = readBody ? try goResp.bodyBytes() : Data()
 
         return LocalAPIResponse(statusCode: statusCode, body: bodyData)
     }
@@ -101,6 +105,7 @@ enum GoBridge {
     static func stopNotifications(_ handle: NotificationHandle) {
         handle.goManager?.stop()
         handle.goManager = nil
+        handle.goCallback = nil
     }
 
     /// Stop the Go backend and release retained bridge objects.
@@ -132,7 +137,7 @@ class GoPacketCallback: NSObject, LibtailscalePacketCallbackProtocol {
 enum GoBridge {
     static var application: AnyObject? { nil }
 
-    static func start(dataDir: String, directFileRoot: String, hwAttestation: Bool) -> Bool {
+    static func start(dataDir: String, directFileRoot: String, hwAttestation: Bool, appLogin: Bool = false) -> Bool {
         NSLog("[GoBridge] start() — stub, Go backend not built. Run ios/build_go.sh first.")
         return false
     }
@@ -146,7 +151,8 @@ enum GoBridge {
         timeoutMillis: Int,
         method: String,
         endpoint: String,
-        body: Data? = nil
+        body: Data? = nil,
+        readBody: Bool = true
     ) async throws -> LocalAPIResponse {
         NSLog("[GoBridge] callLocalAPI(\(method) \(endpoint)) — stub")
         throw GoBridgeError.notImplemented
@@ -181,6 +187,7 @@ enum GoBridge {
 class NotificationHandle {
     #if canImport(Libtailscale)
     var goManager: (any LibtailscaleNotificationManagerProtocol)?
+    var goCallback: AnyObject?
     #endif
 }
 

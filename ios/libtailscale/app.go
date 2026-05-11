@@ -19,6 +19,7 @@ import (
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/logtail"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
 	"tailscale.com/tsd"
@@ -68,7 +69,7 @@ type backend struct {
 	appCtx      AppContext
 }
 
-func start(dataDir, directFileRoot string, hwAttestationPref bool, appCtx AppContext) Application {
+func start(dataDir, directFileRoot string, hwAttestationPref bool, disableInterfaceBinding bool, appCtx AppContext) Application {
 	defer func() {
 		if p := recover(); p != nil {
 			log.Printf("panic in Start %s: %s", p, debug.Stack())
@@ -77,6 +78,7 @@ func start(dataDir, directFileRoot string, hwAttestationPref bool, appCtx AppCon
 	}()
 
 	initLogging(appCtx)
+	netns.SetDisableBindConnToInterface(log.Printf, disableInterfaceBinding)
 
 	if _, exists := os.LookupEnv("XDG_CACHE_HOME"); !exists {
 		os.Setenv("XDG_CACHE_HOME", filepath.Join(dataDir, "cache"))
