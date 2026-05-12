@@ -311,7 +311,7 @@ struct PingView: View {
                     Text(peer.displayName)
                 }
                 
-                if let addr = peer.addresses.first {
+                if let addr = peer.primaryIPv4Address ?? peer.addresses.first {
                     HStack {
                         Text("Address")
                             .foregroundColor(.secondary)
@@ -339,7 +339,7 @@ struct PingView: View {
                         Spacer()
                     }
                 }
-                .disabled(isPinging)
+                .disabled(isPinging || peer.primaryIPv4Address == nil)
             }
             
             if !pingResults.isEmpty {
@@ -381,6 +381,10 @@ struct PingView: View {
     
     private func startPing() {
         guard let vpn = appState.vpnManager else { return }
+        guard let targetIP = peer.primaryIPv4Address else {
+            pingResults = [PingResult(seq: 1, error: "No IPv4 address")]
+            return
+        }
         
         isPinging = true
         pingResults = []
@@ -392,14 +396,20 @@ struct PingView: View {
                 pingCount = seq
                 
                 do {
-                    let endpoint = "/localapi/v0/ping?ip=\(peer.addresses.first ?? "")&type=disco"
-                    let resp = try await vpn.callLocalAPI(method: "POST", endpoint: endpoint)
+                    let endpoint = "/localapi/v0/ping?ip=\(targetIP)&type=disco"
+                    let resp = try await vpn.callLocalAPI(method: "POST", endpoint: endpoint, timeout: 3000)
                     
                     if resp.statusCode == 200,
                        let bodyB64 = resp.bodyBase64,
                        let bodyData = Data(base64Encoded: bodyB64) {
-                        if let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
-                           let latency = json["LatencySeconds"] as? Double {
+                        if let result = try? JSONDecoder().decode(PingAPIResponse.self, from: bodyData),
+                           let error = result.Err,
+                           !error.isEmpty {
+                            await MainActor.run {
+                                pingResults.append(PingResult(seq: seq, error: error))
+                            }
+                        } else if let result = try? JSONDecoder().decode(PingAPIResponse.self, from: bodyData),
+                                  let latency = result.LatencySeconds {
                             await MainActor.run {
                                 pingResults.append(PingResult(seq: seq, latencyMs: latency * 1000))
                             }
@@ -409,8 +419,9 @@ struct PingView: View {
                             }
                         }
                     } else {
+                        let errorMessage = pingErrorMessage(from: resp)
                         await MainActor.run {
-                            pingResults.append(PingResult(seq: seq, error: "Request failed"))
+                            pingResults.append(PingResult(seq: seq, error: errorMessage))
                         }
                     }
                 } catch {
@@ -428,6 +439,16 @@ struct PingView: View {
             }
         }
     }
+
+    private func pingErrorMessage(from response: IPCResponse) -> String {
+        if let bodyB64 = response.bodyBase64,
+           let bodyData = Data(base64Encoded: bodyB64),
+           let body = String(data: bodyData, encoding: .utf8),
+           !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return body.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return response.error ?? "Request failed"
+    }
     
     private func latencyColor(_ ms: Double) -> Color {
         if ms < 50 { return .green }
@@ -444,6 +465,11 @@ struct PingResult: Identifiable {
     var error: String? = nil
 }
 
+private struct PingAPIResponse: Decodable {
+    let Err: String?
+    let LatencySeconds: Double?
+}
+
 #Preview {
     NavigationView {
         PeerDetailView(peer: PeerNode(
@@ -452,12 +478,15 @@ struct PingResult: Identifiable {
                 StableID: "abc123",
                 Key: "nodekey:abc123def456",
                 Name: "my-macbook.tailnet-name.ts.net",
+                ComputedName: "my-macbook",
+                Hostinfo: .init(Hostname: "my-macbook"),
                 Addresses: ["100.100.1.1/32", "fd7a:115c:a1e0::1/128"],
                 Online: true,
                 OS: "macOS",
                 UserID: 1,
                 KeyExpiry: "2025-12-31T23:59:59Z",
-                IsExitNode: true
+                IsExitNode: true,
+                AllowedIPs: ["0.0.0.0/0", "::/0"]
             ),
             isSelf: false,
             userProfile: nil

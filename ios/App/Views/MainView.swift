@@ -162,7 +162,11 @@ struct MainView: View {
                 appState.loadAwgStatusIfNeeded()
             }
             .onChange(of: vpnManager.vpnStatus) { _ in
-                appState.loadAwgStatusIfNeeded()
+                if vpnManager.vpnStatus == .connected {
+                    appState.refreshAwgStatusForTunnelChange()
+                } else {
+                    appState.loadAwgStatusIfNeeded()
+                }
             }
             .onChange(of: appState.peers.count) { _ in
                 appState.loadAwgStatusIfNeeded()
@@ -214,8 +218,8 @@ struct PeerRow: View {
 
             Spacer()
 
-            // AWG sync button (available for remote peers; backend reports if no AWG config exists)
-            if !peer.isCurrentDevice {
+            // AWG sync button (only for remote peers that already expose AWG config)
+            if !peer.isCurrentDevice && hasAwgConfig {
                 Button {
                     appState.syncAwgConfigFromPeer(peer)
                 } label: {

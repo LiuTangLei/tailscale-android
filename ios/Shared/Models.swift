@@ -62,6 +62,8 @@ struct MaskedPrefs: Codable {
     var ExitNodeAllowLANAccessSet: Bool?
     var ControlURL: String?
     var ControlURLSet: Bool?
+    var AmneziaWG: AmneziaWGPrefs?
+    var AmneziaWGSet: Bool?
 
     /// Helper to create a "set WantRunning" pref update.
     static func setWantRunning(_ value: Bool) -> MaskedPrefs {
@@ -71,6 +73,11 @@ struct MaskedPrefs: Codable {
     /// Helper to set a custom control server URL.
     static func setControlURL(_ url: String) -> MaskedPrefs {
         MaskedPrefs(ControlURL: url, ControlURLSet: true)
+    }
+
+    /// Helper to set or clear the local AWG configuration.
+    static func setAmneziaWG(_ config: AmneziaWGPrefs) -> MaskedPrefs {
+        MaskedPrefs(AmneziaWG: config, AmneziaWGSet: true)
     }
 }
 
@@ -111,17 +118,24 @@ struct NetworkMap: Codable {
     let Domain: String?
     let UserProfiles: [String: LoginProfile.UserProfile]?
 
+    struct HostinfoData: Codable {
+        let Hostname: String?
+    }
+
     struct NodeData: Codable, Identifiable {
         let ID: Int64?
         let StableID: String?
         let Key: String?
         let Name: String?
+        let ComputedName: String?
+        let Hostinfo: HostinfoData?
         let Addresses: [String]?
         let Online: Bool?
         let OS: String?
         let UserID: Int64?
         let KeyExpiry: String?
         let IsExitNode: Bool?
+        let AllowedIPs: [String]?
 
         var id: String { StableID ?? "\(self.ID ?? 0)" }
     }
@@ -162,6 +176,13 @@ struct AmneziaWGPrefs: Codable {
     let H2: MagicHeaderRange?
     let H3: MagicHeaderRange?
     let H4: MagicHeaderRange?
+
+    static let empty = AmneziaWGPrefs(
+        JC: nil, JMin: nil, JMax: nil,
+        S1: nil, S2: nil, S3: nil, S4: nil,
+        I1: nil, I2: nil, I3: nil, I4: nil, I5: nil,
+        H1: nil, H2: nil, H3: nil, H4: nil
+    )
 
     /// Returns true if any AWG parameter has a non-default value.
     var hasNonDefaultValues: Bool {
@@ -257,6 +278,9 @@ struct PeerNode: Identifiable {
     let userDisplayName: String?
     let keyExpiry: String?
     let isExitNode: Bool
+    let allowedIPs: [String]
+    let computedName: String?
+    let hostinfoHostname: String?
 
     private static func displayName(from name: String?) -> String {
         guard let name = name, !name.isEmpty else { return "Unknown" }
@@ -271,17 +295,34 @@ struct PeerNode: Identifiable {
             .lowercased() ?? ""
     }
 
+    var primaryIPv4Address: String? {
+        addresses
+            .compactMap { $0.components(separatedBy: "/").first }
+            .first { $0.contains(".") }
+    }
+
+    private static func isExitNode(_ node: NetworkMap.NodeData) -> Bool {
+        if node.IsExitNode == true { return true }
+        return (node.AllowedIPs ?? []).contains { route in
+            let normalized = route.trimmingCharacters(in: .whitespacesAndNewlines)
+            return normalized == "0.0.0.0/0" || normalized == "::/0"
+        }
+    }
+
     init(from node: NetworkMap.NodeData, isSelf: Bool, userProfile: LoginProfile.UserProfile?) {
         self.id = node.id
         self.nodeKey = node.Key
         self.displayName = Self.displayName(from: node.Name)
-        self.hostname = node.Name ?? ""
+        self.hostname = node.Hostinfo?.Hostname ?? node.ComputedName ?? node.Name ?? ""
         self.addresses = node.Addresses ?? []
         self.online = node.Online ?? false
         self.os = node.OS
         self.isCurrentDevice = isSelf
         self.userDisplayName = userProfile?.DisplayName ?? userProfile?.LoginName
         self.keyExpiry = node.KeyExpiry
-        self.isExitNode = node.IsExitNode ?? false
+        self.allowedIPs = node.AllowedIPs ?? []
+        self.computedName = node.ComputedName
+        self.hostinfoHostname = node.Hostinfo?.Hostname
+        self.isExitNode = Self.isExitNode(node)
     }
 }

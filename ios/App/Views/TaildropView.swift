@@ -124,11 +124,16 @@ struct TaildropView: View {
         error = nil
         
         do {
-            let resp = try await vpn.callLocalAPI(method: "GET", endpoint: "/localapi/v0/files/")
+            let resp = try await vpn.callLocalAPI(method: "GET", endpoint: "/localapi/v0/files")
             
             guard resp.statusCode == 200,
                   let bodyB64 = resp.bodyBase64,
                   let bodyData = Data(base64Encoded: bodyB64) else {
+                if resp.statusCode == 404 {
+                    incomingFiles = loadLocalIncomingFiles()
+                    isLoading = false
+                    return
+                }
                 // 204 or empty response means no files
                 if resp.statusCode == 204 || resp.statusCode == 200 {
                     incomingFiles = []
@@ -153,6 +158,25 @@ struct TaildropView: View {
             self.error = "Failed to load files: \(error.localizedDescription)"
             isLoading = false
         }
+    }
+
+    private func loadLocalIncomingFiles() -> [TaildropFile] {
+        guard let groupContainer = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.tailscale.ipn.ios") else {
+            return []
+        }
+        let taildropDir = groupContainer.appendingPathComponent("taildrop", isDirectory: true)
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: taildropDir,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .creationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        return urls.compactMap { url in
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+            guard values?.isDirectory != true else { return nil }
+            return TaildropFile(localURL: url)
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 }
 
@@ -437,7 +461,7 @@ struct ShareSheet: UIViewControllerRepresentable {
 
 // MARK: - Models
 
-/// Response from /localapi/v0/files/
+/// Response from /localapi/v0/files
 struct TaildropFileResponse: Codable {
     let Name: String
     let Size: Int64
@@ -469,6 +493,16 @@ struct TaildropFile: Identifiable {
         } else {
             self.localURL = nil
         }
+    }
+
+    init(localURL: URL) {
+        self.id = localURL.path
+        self.name = localURL.lastPathComponent
+        self.sender = nil
+        let values = try? localURL.resourceValues(forKeys: [.fileSizeKey, .creationDateKey])
+        self.size = Int64(values?.fileSize ?? 0)
+        self.started = values?.creationDate
+        self.localURL = localURL
     }
 }
 

@@ -59,3 +59,11 @@ func parseCIDR(_ cidr: String) -> (address: String, prefixLen: Int)? {
     if addr.isEmpty { return nil }
     return (addr, prefix)
 }
+
+func isIPv4DefaultRoute(address: String, prefixLen: Int) -> Bool {
+    address == "0.0.0.0" && prefixLen == 0
+}
+
+func isIPv6DefaultRoute(address: String, prefixLen: Int) -> Bool {
+    address == "::" && prefixLen == 0
+}

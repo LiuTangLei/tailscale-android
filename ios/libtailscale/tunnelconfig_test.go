@@ -92,8 +92,10 @@ func TestTunnelConfigOnConfigUpdateDelivers(t *testing.T) {
 	if len(tc.LocalAddresses) != 2 {
 		t.Errorf("LocalAddresses = %v", tc.LocalAddresses)
 	}
-	if len(tc.Routes) != 2 {
-		t.Errorf("Routes = %v", tc.Routes)
+	for _, want := range []string{"10.1.0.0/16", "fd00::/8", "100.64.0.0/10", "fd7a:115c:a1e0::/48"} {
+		if !containsString(tc.Routes, want) {
+			t.Errorf("Routes = %v, missing %s", tc.Routes, want)
+		}
 	}
 	if len(tc.ExcludeRoutes) != 1 || tc.ExcludeRoutes[0] != "192.168.1.0/24" {
 		t.Errorf("ExcludeRoutes = %v", tc.ExcludeRoutes)
@@ -180,6 +182,15 @@ func TestTunnelConfigDefaultMTUFallback(t *testing.T) {
 	}
 }
 
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestTunnelConfigEmptyRoutesFallback(t *testing.T) {
 	mgr := &tunnelConfigManager{}
 	cb := &recordingCallback{}
@@ -200,6 +211,104 @@ func TestTunnelConfigEmptyRoutesFallback(t *testing.T) {
 	}
 	if len(tc.Routes) != 2 {
 		t.Errorf("Routes = %v, want CGNAT+ULA fallback", tc.Routes)
+	}
+}
+
+func TestTunnelConfigDoesNotExcludeCoreRoutes(t *testing.T) {
+	mgr := &tunnelConfigManager{}
+	cb := &recordingCallback{}
+	mgr.setCallback(cb)
+
+	rc := sampleRouterConfig()
+	rc.LocalRoutes = []netip.Prefix{
+		netip.MustParsePrefix("100.64.0.0/10"),
+		netip.MustParsePrefix("100.64.0.36/32"),
+		netip.MustParsePrefix("fd7a:115c:a1e0::/48"),
+		netip.MustParsePrefix("127.0.0.1/32"),
+		netip.MustParsePrefix("192.168.1.0/24"),
+	}
+
+	if err := mgr.onConfigUpdate(rc, nil); err != nil {
+		t.Fatalf("onConfigUpdate: %v", err)
+	}
+
+	configs := cb.snapshot()
+	var tc TunnelConfig
+	if err := json.Unmarshal(configs[0], &tc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !containsString(tc.Routes, "100.64.0.0/10") {
+		t.Fatalf("Routes = %v, missing CGNAT route", tc.Routes)
+	}
+	for _, forbidden := range []string{"100.64.0.0/10", "100.64.0.36/32", "fd7a:115c:a1e0::/48", "127.0.0.1/32"} {
+		if containsString(tc.ExcludeRoutes, forbidden) {
+			t.Fatalf("ExcludeRoutes = %v, must not contain %s", tc.ExcludeRoutes, forbidden)
+		}
+	}
+	if !containsString(tc.ExcludeRoutes, "192.168.1.0/24") {
+		t.Fatalf("ExcludeRoutes = %v, missing LAN route", tc.ExcludeRoutes)
+	}
+}
+
+func TestTunnelConfigExitNodeUsesPublicDNSForSystemResolver(t *testing.T) {
+	mgr := &tunnelConfigManager{}
+	cb := &recordingCallback{}
+	mgr.setCallback(cb)
+
+	rc := sampleRouterConfig()
+	rc.Routes = []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/0"),
+		netip.MustParsePrefix("::/0"),
+	}
+	dcfg := &dns.OSConfig{
+		Nameservers: []netip.Addr{
+			netip.MustParseAddr("100.100.100.100"),
+			netip.MustParseAddr("fd7a:115c:a1e0::53"),
+		},
+	}
+
+	if err := mgr.onConfigUpdate(rc, dcfg); err != nil {
+		t.Fatalf("onConfigUpdate: %v", err)
+	}
+
+	configs := cb.snapshot()
+	var tc TunnelConfig
+	if err := json.Unmarshal(configs[0], &tc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !containsString(tc.Routes, "0.0.0.0/0") || !containsString(tc.Routes, "::/0") {
+		t.Fatalf("Routes = %v, missing default routes", tc.Routes)
+	}
+	if len(tc.DNSServers) != len(exitNodePublicDNSServers) {
+		t.Fatalf("DNSServers = %v, want %v", tc.DNSServers, exitNodePublicDNSServers)
+	}
+	for i, want := range exitNodePublicDNSServers {
+		if tc.DNSServers[i] != want {
+			t.Fatalf("DNSServers = %v, want %v", tc.DNSServers, exitNodePublicDNSServers)
+		}
+	}
+}
+
+func TestTunnelConfigExitNodePreservesCustomDNS(t *testing.T) {
+	mgr := &tunnelConfigManager{}
+	cb := &recordingCallback{}
+	mgr.setCallback(cb)
+
+	rc := sampleRouterConfig()
+	rc.Routes = []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}
+	dcfg := &dns.OSConfig{Nameservers: []netip.Addr{netip.MustParseAddr("9.9.9.9")}}
+
+	if err := mgr.onConfigUpdate(rc, dcfg); err != nil {
+		t.Fatalf("onConfigUpdate: %v", err)
+	}
+
+	configs := cb.snapshot()
+	var tc TunnelConfig
+	if err := json.Unmarshal(configs[0], &tc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(tc.DNSServers) != 1 || tc.DNSServers[0] != "9.9.9.9" {
+		t.Fatalf("DNSServers = %v, want custom resolver", tc.DNSServers)
 	}
 }
 

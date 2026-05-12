@@ -3,6 +3,7 @@ package libtailscale
 import (
 	"errors"
 	"io"
+	"log"
 	"os"
 	"sync"
 
@@ -19,11 +20,11 @@ var errInboundQueueFull = errors.New("tun inbound queue full")
 // from NEPacketTunnelFlow and injects them with InjectInboundPacket; packets
 // written by wireguard-go are delivered back to Swift via PacketCallback.
 type pendingTUN struct {
-	events  chan tun.Event
-	closed  chan struct{}
-	inbound chan []byte
-	once    sync.Once
-	closeMu sync.RWMutex
+	events   chan tun.Event
+	closed   chan struct{}
+	inbound  chan []byte
+	once     sync.Once
+	closeMu  sync.RWMutex
 	isClosed bool
 
 	packetMu sync.RWMutex
@@ -83,6 +84,7 @@ func (t *pendingTUN) Write(bufs [][]byte, offset int) (int, error) {
 			continue
 		}
 		if err := cb.OnPacket(packet); err != nil {
+			log.Printf("packet callback failed after %d packet(s): %v", i, err)
 			return i, err
 		}
 	}
@@ -129,6 +131,7 @@ func (t *pendingTUN) InjectInboundPacket(packet []byte) error {
 	case t.inbound <- packet:
 		return nil
 	default:
+		log.Printf("TUN inbound queue full packetBytes=%d queueDepth=%d", len(packet), len(t.inbound))
 		return errInboundQueueFull
 	}
 }

@@ -11,6 +11,13 @@ import (
 	"tailscale.com/util/dnsname"
 )
 
+var googleDNSServers = []netip.Addr{
+	netip.MustParseAddr("8.8.8.8"),
+	netip.MustParseAddr("8.8.4.4"),
+	netip.MustParseAddr("2001:4860:4860::8888"),
+	netip.MustParseAddr("2001:4860:4860::8844"),
+}
+
 func (a *App) getInterfaces() ([]netmon.Interface, error) {
 	jsonStr, err := a.appCtx.GetInterfacesAsJson()
 	if err != nil {
@@ -24,14 +31,20 @@ func (a *App) getInterfaces() ([]netmon.Interface, error) {
 	return ifaces, err
 }
 
-func (b *backend) getDNSBaseConfig() (dns.OSConfig, error) {
+func (b *backend) getDNSBaseConfig() (config dns.OSConfig, _ error) {
+	defer func() {
+		if len(config.Nameservers) == 0 && b.appCtx.ShouldUseGoogleDNSFallback() {
+			log.Printf("getDNSBaseConfig: none found; falling back to Google public DNS")
+			config.Nameservers = append(config.Nameservers, googleDNSServers...)
+		}
+	}()
+
 	baseConfig := b.appCtx.GetPlatformDNSConfig()
 	lines := strings.Split(baseConfig, "\n")
 	if len(lines) == 0 {
 		return dns.OSConfig{}, nil
 	}
 
-	config := dns.OSConfig{}
 	addrs := strings.Trim(lines[0], " \n")
 	for _, addr := range strings.Split(addrs, " ") {
 		ip, err := netip.ParseAddr(addr)

@@ -10,7 +10,9 @@ import (
 )
 
 type testAppContext struct {
-	store map[string]string
+	store             map[string]string
+	platformDNSConfig string
+	googleDNSFallback bool
 }
 
 func newTestAppContext() *testAppContext {
@@ -24,10 +26,10 @@ func (f *testAppContext) GetStateStoreKeysJSON() string              { return "[
 func (f *testAppContext) GetOSVersion() (string, error)              { return "iOS 18.0", nil }
 func (f *testAppContext) GetDeviceName() (string, error)             { return "iPhone", nil }
 func (f *testAppContext) GetInstallSource() string                   { return "appstore" }
-func (f *testAppContext) ShouldUseGoogleDNSFallback() bool           { return false }
+func (f *testAppContext) ShouldUseGoogleDNSFallback() bool           { return f.googleDNSFallback }
 func (f *testAppContext) IsChromeOS() (bool, error)                  { return false, nil }
 func (f *testAppContext) GetInterfacesAsJson() (string, error)       { return "[]", nil }
-func (f *testAppContext) GetPlatformDNSConfig() string               { return "" }
+func (f *testAppContext) GetPlatformDNSConfig() string               { return f.platformDNSConfig }
 func (f *testAppContext) GetSyspolicyStringValue(key string) (string, error) {
 	return "", nil
 }
@@ -86,6 +88,43 @@ func TestPendingTUNMTU(t *testing.T) {
 	}
 	if mtu != defaultMTU {
 		t.Fatalf("MTU = %d, want %d", mtu, defaultMTU)
+	}
+}
+
+func TestGetDNSBaseConfigUsesPlatformDNS(t *testing.T) {
+	ctx := newTestAppContext()
+	ctx.platformDNSConfig = "1.1.1.1 2606:4700:4700::1111\nlan"
+	b := &backend{appCtx: ctx}
+
+	cfg, err := b.getDNSBaseConfig()
+	if err != nil {
+		t.Fatalf("getDNSBaseConfig: %v", err)
+	}
+	if got, want := len(cfg.Nameservers), 2; got != want {
+		t.Fatalf("len(Nameservers) = %d, want %d", got, want)
+	}
+	if got, want := cfg.Nameservers[0].String(), "1.1.1.1"; got != want {
+		t.Fatalf("Nameservers[0] = %q, want %q", got, want)
+	}
+	if got, want := cfg.SearchDomains[0].WithoutTrailingDot(), "lan"; got != want {
+		t.Fatalf("SearchDomains[0] = %q, want %q", got, want)
+	}
+}
+
+func TestGetDNSBaseConfigGoogleFallback(t *testing.T) {
+	ctx := newTestAppContext()
+	ctx.googleDNSFallback = true
+	b := &backend{appCtx: ctx}
+
+	cfg, err := b.getDNSBaseConfig()
+	if err != nil {
+		t.Fatalf("getDNSBaseConfig: %v", err)
+	}
+	if got, want := len(cfg.Nameservers), len(googleDNSServers); got != want {
+		t.Fatalf("len(Nameservers) = %d, want %d", got, want)
+	}
+	if got, want := cfg.Nameservers[0], googleDNSServers[0]; got != want {
+		t.Fatalf("Nameservers[0] = %v, want %v", got, want)
 	}
 }
 

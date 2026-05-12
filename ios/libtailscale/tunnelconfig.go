@@ -11,6 +11,21 @@ import (
 	"tailscale.com/wgengine/router"
 )
 
+var coreTunnelRoutes = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("fd7a:115c:a1e0::/48"),
+}
+
+var exitNodePublicDNSServers = []string{
+	"8.8.8.8",
+	"8.8.4.4",
+}
+
+var tailscaleServiceDNSServers = map[string]bool{
+	"100.100.100.100":    true,
+	"fd7a:115c:a1e0::53": true,
+}
+
 // TunnelConfig is the JSON-serializable tunnel configuration pushed to Swift.
 // It contains everything NEPacketTunnelProvider needs to call
 // setTunnelNetworkSettings.
@@ -79,9 +94,13 @@ func (m *tunnelConfigManager) onConfigUpdate(rcfg *router.Config, dcfg *dns.OSCo
 	for _, route := range rcfg.Routes {
 		tc.Routes = append(tc.Routes, route.String())
 	}
+	tc.Routes = appendMissingCoreTunnelRoutes(tc.Routes)
 
 	// Excluded routes (routes that should stay outside the tunnel).
 	for _, route := range rcfg.LocalRoutes {
+		if shouldSkipExcludeRoute(route) {
+			continue
+		}
 		tc.ExcludeRoutes = append(tc.ExcludeRoutes, route.String())
 	}
 
@@ -102,13 +121,9 @@ func (m *tunnelConfigManager) onConfigUpdate(rcfg *router.Config, dcfg *dns.OSCo
 	if len(tc.DNSServers) == 0 {
 		tc.DNSServers = []string{"100.100.100.100"}
 	}
-
-	// Fallback: if no routes, route the Tailscale CGNAT range
-	if len(tc.Routes) == 0 {
-		tc.Routes = []string{
-			netip.MustParsePrefix("100.64.0.0/10").String(),
-			netip.MustParsePrefix("fd7a:115c:a1e0::/48").String(),
-		}
+	if hasDefaultRoute(tc.Routes) && dnsServersAreTailscaleServiceIPs(tc.DNSServers) {
+		log.Printf("exit node: using public DNS servers for NetworkExtension DNS to avoid PeerAPI DNS proxy timeout")
+		tc.DNSServers = append([]string(nil), exitNodePublicDNSServers...)
 	}
 
 	configJSON, err := json.Marshal(tc)
@@ -126,7 +141,64 @@ func (m *tunnelConfigManager) onConfigUpdate(rcfg *router.Config, dcfg *dns.OSCo
 
 	err = cb.OnTunnelConfigUpdate(configJSON)
 	m.mu.Unlock()
+	if err != nil {
+		log.Printf("tunnel config: callback failed: %v", err)
+	}
 	return err
+}
+
+func appendMissingCoreTunnelRoutes(routes []string) []string {
+	seen := make(map[string]bool, len(routes)+len(coreTunnelRoutes))
+	for _, route := range routes {
+		seen[route] = true
+	}
+	for _, route := range coreTunnelRoutes {
+		routeStr := route.String()
+		if !seen[routeStr] {
+			routes = append(routes, routeStr)
+			seen[routeStr] = true
+		}
+	}
+	return routes
+}
+
+func shouldSkipExcludeRoute(route netip.Prefix) bool {
+	if route.Addr().IsLoopback() {
+		return true
+	}
+	route = route.Masked()
+	for _, coreRoute := range coreTunnelRoutes {
+		if route.Overlaps(coreRoute.Masked()) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDefaultRoute(routes []string) bool {
+	for _, route := range routes {
+		prefix, err := netip.ParsePrefix(route)
+		if err != nil {
+			continue
+		}
+		prefix = prefix.Masked()
+		if (prefix.Addr().Is4() && prefix.Bits() == 0) || (prefix.Addr().Is6() && prefix.Bits() == 0) {
+			return true
+		}
+	}
+	return false
+}
+
+func dnsServersAreTailscaleServiceIPs(servers []string) bool {
+	if len(servers) == 0 {
+		return false
+	}
+	for _, server := range servers {
+		if !tailscaleServiceDNSServers[server] {
+			return false
+		}
+	}
+	return true
 }
 
 // setTunnelConfigCallback is called from the exported SetTunnelConfigCallback.

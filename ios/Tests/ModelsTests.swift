@@ -132,18 +132,70 @@ final class ModelsTests: XCTestCase {
                 StableID: "stable-1",
                 Key: nil,
                 Name: "server",
+                ComputedName: nil,
+                Hostinfo: nil,
                 Addresses: [],
                 Online: true,
                 OS: nil,
                 UserID: nil,
                 KeyExpiry: nil,
-                IsExitNode: nil
+                IsExitNode: nil,
+                AllowedIPs: nil
             ),
             isSelf: false,
             userProfile: nil
         )
 
         XCTAssertEqual(peer.displayName, "server")
+    }
+
+    func testPeerExitNodeFromAllowedIPs() {
+        let peer = PeerNode(
+            from: .init(
+                ID: 2,
+                StableID: "stable-2",
+                Key: nil,
+                Name: "router.",
+                ComputedName: nil,
+                Hostinfo: nil,
+                Addresses: ["100.64.0.2/32"],
+                Online: true,
+                OS: "linux",
+                UserID: nil,
+                KeyExpiry: nil,
+                IsExitNode: nil,
+                AllowedIPs: ["0.0.0.0/0", "::/0"]
+            ),
+            isSelf: false,
+            userProfile: nil
+        )
+
+        XCTAssertTrue(peer.isExitNode)
+    }
+
+    func testPeerHostnamePrefersHostinfoForMatching() {
+        let peer = PeerNode(
+            from: .init(
+                ID: 3,
+                StableID: "stable-3",
+                Key: nil,
+                Name: "display-name.tailnet.ts.net",
+                ComputedName: "computed-name",
+                Hostinfo: .init(Hostname: "hostinfo-name"),
+                Addresses: [],
+                Online: true,
+                OS: nil,
+                UserID: nil,
+                KeyExpiry: nil,
+                IsExitNode: nil,
+                AllowedIPs: nil
+            ),
+            isSelf: false,
+            userProfile: nil
+        )
+
+        XCTAssertEqual(peer.hostname, "hostinfo-name")
+        XCTAssertEqual(peer.normalizedHostname, "hostinfo-name")
     }
 
     // MARK: - Health

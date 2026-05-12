@@ -70,6 +70,13 @@ gomobile bind \
     -ldflags="-s -w" \
     ./libtailscale
 
+# Some gomobile/Xcode combinations emit framework Info.plist files with
+# MinimumOSVersion=100.0 even when -iosversion is set. Normalize the embedded
+# framework plists so Xcode can select both device and simulator slices.
+find "$OUTPUT" -path "*/Libtailscale.framework/Info.plist" -print0 | while IFS= read -r -d '' plist; do
+    plutil -replace MinimumOSVersion -string 15.0 "$plist"
+done
+
 echo ""
 echo "Success: $OUTPUT"
 ls -lh "$OUTPUT"

@@ -8,17 +8,14 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if appState.isAwaitingMachineAuth || appState.ipnState == .needsMachineAuth {
+            if appState.isLoggingIn && !appState.isAwaitingMachineAuth {
+                LoginView()
+            } else if appState.isAwaitingMachineAuth {
                 MachineAuthView()
-            } else if appState.isLoggingIn {
+            } else if appState.shouldShowLoginView {
                 LoginView()
             } else {
-                switch appState.ipnState {
-                case .noState, .needsLogin:
-                    LoginView()
-                default:
-                    MainView()
-                }
+                MainView()
             }
         }
         .sheet(isPresented: Binding(

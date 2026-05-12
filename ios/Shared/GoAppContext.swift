@@ -21,7 +21,7 @@ class GoAppContext: NSObject, LibtailscaleAppContextProtocol {
 
     private static func keychainGroupCandidates() -> [String?] {
         let baseGroup = IPCConstants.keychainGroupID
-        return ["TROLLSTORE.\(baseGroup)", baseGroup, nil]
+        return ["TROLLSTORE.\(baseGroup)", nil]
     }
 
     private static func withAccessGroup(_ keychainGroup: String?, query: [String: Any]) -> [String: Any] {
@@ -220,7 +220,7 @@ class GoAppContext: NSObject, LibtailscaleAppContextProtocol {
     }
 
     func shouldUseGoogleDNSFallback() -> Bool {
-        return false // iOS does not need Google DNS fallback
+        return true
     }
 
     /// Go's (bool, error) return maps to ObjC BOOL output parameter + NSError**.

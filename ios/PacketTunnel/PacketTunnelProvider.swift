@@ -416,6 +416,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             logger.error("ignoring IPv4 route with invalid prefix: \(routeStr, privacy: .private)")
             return nil
         }
+        if isIPv4DefaultRoute(address: route.address, prefixLen: route.prefixLen) {
+            return NEIPv4Route.default()
+        }
         return NEIPv4Route(destinationAddress: route.address, subnetMask: prefixLenToMask(route.prefixLen))
     }
 
@@ -428,6 +431,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         guard (0...128).contains(route.prefixLen) else {
             logger.error("ignoring IPv6 route with invalid prefix: \(routeStr, privacy: .private)")
             return nil
+        }
+        if isIPv6DefaultRoute(address: route.address, prefixLen: route.prefixLen) {
+            return NEIPv6Route.default()
         }
         return NEIPv6Route(destinationAddress: route.address,
                            networkPrefixLength: NSNumber(value: route.prefixLen))
@@ -501,6 +507,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             self.reasserting = true
             self.setTunnelNetworkSettings(request.settings) { [weak self] error in
+                if let error = error {
+                    self?.logger.error("setTunnelNetworkSettings failed: \(error.localizedDescription)")
+                }
                 request.completion?(error)
                 self?.finishTunnelSettingsUpdate()
             }

@@ -35,13 +35,6 @@ struct ExitNodeView: View {
         return appState.peers.first { $0.id == exitID }
     }
     
-    /// Check if current exit node is a Mullvad node.
-    private var isMullvadActive: Bool {
-        guard let current = currentExitNode else { return false }
-        let name = current.hostname.lowercased()
-        return name.hasPrefix("mullvad-") || name.contains("-wg-")
-    }
-    
     var body: some View {
         List {
             // Current selection section
@@ -92,32 +85,6 @@ struct ExitNodeView: View {
                     Text("Allow access to local network devices when using an exit node.")
                 }
             }
-            
-            // Mullvad Exit Nodes section
-            Section {
-                NavigationLink(destination: MullvadView()) {
-                    HStack {
-                        Image(systemName: "globe.europe.africa")
-                            .foregroundColor(.accentColor)
-                            .frame(width: 24)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Mullvad Exit Nodes")
-                            Text("60+ global locations")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        if isMullvadActive {
-                            Text("Active")
-                                .font(.caption)
-                                .foregroundColor(.green)
-                        }
-                    }
-                }
-            } header: {
-                Text("Commercial VPN")
-            }
-            
             // Available exit nodes
             Section {
                 if filteredExitNodes.isEmpty {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -12,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/feature/taildrop"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
@@ -247,8 +250,26 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore) (
 		return nil, fmt.Errorf("netstack.Create: %w", err)
 	}
 	sys.Set(ns)
-	ns.ProcessLocalIPs = true
+	ns.ProcessLocalIPs = false // let NetworkExtension packetFlow feed local-IP traffic through WireGuard
 	ns.ProcessSubnets = true
+	dialer.UseNetstackForIP = func(ip netip.Addr) bool {
+		_, ok := engine.PeerForIP(ip)
+		return ok
+	}
+	dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+		conn, err := ns.DialContextTCP(ctx, dst)
+		if err != nil {
+			return nil, err
+		}
+		return conn, nil
+	}
+	dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+		conn, err := ns.DialContextUDP(ctx, dst)
+		if err != nil {
+			return nil, err
+		}
+		return conn, nil
+	}
 	sys.NetstackRouter.Set(true)
 	if w, ok := sys.Tun.GetOK(); ok {
 		w.Start()
@@ -258,6 +279,15 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore) (
 	if err != nil {
 		a.closeBackendState(b)
 		return nil, fmt.Errorf("runBackend: NewLocalBackend: %v", err)
+	}
+	if a.directFileRoot != "" {
+		if err := os.MkdirAll(a.directFileRoot, 0o700); err != nil {
+			log.Printf("taildrop: cannot create direct file root %q: %v", a.directFileRoot, err)
+		} else if ext, ok := ipnlocal.GetExt[*taildrop.Extension](lb); ok {
+			ext.SetDirectFileRoot(a.directFileRoot)
+		} else {
+			log.Printf("taildrop: extension unavailable")
+		}
 	}
 	b.backend = lb
 	if err := ns.Start(lb); err != nil {

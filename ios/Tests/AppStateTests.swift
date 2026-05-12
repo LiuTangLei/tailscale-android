@@ -88,7 +88,7 @@ final class AppStateTests: XCTestCase {
     func testLogoutResetsState() {
         let state = AppState()
         state.ipnState = .running
-        state.peers = [PeerNode(from: .init(ID: 1, StableID: "x", Key: nil, Name: "test.", Addresses: [], Online: true, OS: nil, UserID: nil, KeyExpiry: nil, IsExitNode: nil), isSelf: false, userProfile: nil)]
+        state.peers = [PeerNode(from: .init(ID: 1, StableID: "x", Key: nil, Name: "test.", ComputedName: nil, Hostinfo: nil, Addresses: [], Online: true, OS: nil, UserID: nil, KeyExpiry: nil, IsExitNode: nil, AllowedIPs: nil), isSelf: false, userProfile: nil)]
 
         state.logout()
 
