@@ -18,7 +18,6 @@ import com.tailscale.ipn.App
 import com.tailscale.ipn.R
 import com.tailscale.ipn.mdm.MDMSettings
 import com.tailscale.ipn.ui.localapi.Client
-import com.tailscale.ipn.ui.model.AmneziaWGPrefs
 import com.tailscale.ipn.ui.model.AwgPeerResult
 import com.tailscale.ipn.ui.model.Ipn
 import com.tailscale.ipn.ui.model.Ipn.State
@@ -33,7 +32,6 @@ import java.time.Duration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -116,8 +114,7 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     private var awgPeersLoaded = false
 
     // Local machine AWG configuration status
-    private val _localAwgStatus = MutableStateFlow<Boolean>(false)
-    val localAwgStatus: StateFlow<Boolean> = _localAwgStatus
+    val localAwgStatus: StateFlow<Boolean> = appViewModel.localAwgConfigured
 
     private fun normalizePeerKey(value: String): String {
       return value.trim().trimEnd('.').substringBefore('.').lowercase()
@@ -208,9 +205,9 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
           }
           // Load AWG peers status when network map changes, but only once
           if (!awgPeersLoaded) {
+              awgPeersLoaded = true
               loadAwgPeersStatus()
               loadLocalAwgStatus()
-              awgPeersLoaded = true
           }
           if (netmap.SelfNode.keyDoesNotExpire) {
             showExpiry.set(false)
@@ -334,11 +331,11 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
             result
                 .onSuccess { prefs ->
                     val hasLocalAwg = prefs.AmneziaWG?.hasNonDefaultValues() == true
-                    _localAwgStatus.value = hasLocalAwg
+            appViewModel.setLocalAwgConfigured(hasLocalAwg)
                     TSLog.d("MainViewModel", "Local AWG status loaded: hasAwgConfig=$hasLocalAwg")
                 }.onFailure { error ->
                     TSLog.e("MainViewModel", "Failed to load local AWG status: ${error.message}")
-                    _localAwgStatus.value = false
+            appViewModel.setLocalAwgConfigured(false)
                 }
         }
     }
@@ -385,6 +382,7 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
             result
                 .onSuccess { appliedConfig ->
                     TSLog.d("MainViewModel", "AWG config applied successfully from $hostname: $appliedConfig")
+              appViewModel.setLocalAwgConfigured(appliedConfig.hasNonDefaultValues())
                     _awgStatusMessage.value = "AWG config from $hostname applied successfully"
                     autoReconnectForAwgConfig()
                 }.onFailure { error ->
@@ -400,11 +398,9 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     private fun autoReconnectForAwgConfig() {
         viewModelScope.launch {
             try {
-                TSLog.d("MainViewModel", "Starting auto-reconnect for AWG config")
-                stopVPN()
-                delay(2000)
-                startVPN()
-                TSLog.d("MainViewModel", "Auto-reconnect for AWG config completed")
+          TSLog.d("MainViewModel", "Restarting VPN for AWG config change")
+          restartVPN()
+          TSLog.d("MainViewModel", "VPN restart requested for AWG config change")
             } catch (e: Exception) {
                 TSLog.e("MainViewModel", "Auto-reconnect failed: ${e.message}")
                 _awgStatusMessage.value = "AWG config applied but auto-reconnect failed: ${e.message}"

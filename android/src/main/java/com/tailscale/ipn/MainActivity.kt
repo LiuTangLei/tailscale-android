@@ -65,6 +65,8 @@ import com.tailscale.ipn.ui.util.AndroidTVUtil
 import com.tailscale.ipn.ui.util.set
 import com.tailscale.ipn.ui.util.universalFit
 import com.tailscale.ipn.ui.view.AboutView
+import com.tailscale.ipn.ui.view.AwgConfigViewerView
+import com.tailscale.ipn.ui.view.AwgSettingsView
 import com.tailscale.ipn.ui.view.BugReportView
 import com.tailscale.ipn.ui.view.DNSSettingsView
 import com.tailscale.ipn.ui.view.ExitNodePicker
@@ -310,6 +312,9 @@ class MainActivity : ComponentActivity() {
                           onNavigateToManagedBy = { navController.navigate("managedBy") },
                           onNavigateToUserSwitcher = { navController.navigate("userSwitcher") },
                           onNavigateToPermissions = { navController.navigate("permissions") },
+                          onNavigateToAwgManual = { navController.navigate("awgManual") },
+                          onNavigateToAwgJson = { navController.navigate("awgJson") },
+                          onNavigateToAwgViewer = { navController.navigate("awgViewer") },
                           onBackToSettings = backTo("settings"),
                           onNavigateBackHome = backTo("main"))
                   val exitNodePickerNav =
@@ -376,6 +381,9 @@ class MainActivity : ComponentActivity() {
                   composable("tailnetLock") { TailnetLockSetupView(backTo("settings")) }
                   composable("subnetRouting") { SubnetRoutingView(backTo("settings")) }
                   composable("about") { AboutView(backTo("settings")) }
+                  composable("awgManual") { AwgSettingsView(backTo("settings"), mode = "manual") }
+                  composable("awgJson") { AwgSettingsView(backTo("settings"), mode = "json") }
+                  composable("awgViewer") { AwgConfigViewerView(backTo("settings")) }
                   composable("mdmSettings") { MDMSettingsDebugView(backTo("settings")) }
                   composable("managedBy") { ManagedByView(backTo("settings")) }
                   composable("userSwitcher") { UserSwitcherView(userSwitcherNav) }

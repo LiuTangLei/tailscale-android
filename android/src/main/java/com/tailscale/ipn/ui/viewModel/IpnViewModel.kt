@@ -143,6 +143,10 @@ open class IpnViewModel : ViewModel() {
     UninitializedApp.get().stopVPN()
   }
 
+  fun restartVPN() {
+    UninitializedApp.get().restartVPN()
+  }
+
   // Login/Logout
 
   /**
