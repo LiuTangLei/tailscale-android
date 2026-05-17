@@ -8,6 +8,8 @@ github.com/BurntSushi/toml v1.5.0 h1:W5quZX/G/csjUnuI8SUYlsHs9M38FC7znL0lIO+DvMg
 github.com/BurntSushi/toml v1.5.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/LiuTangLei/tailscale v1.98.1 h1:wIOXgKVkgePGIyS0lzTBP+YRtlQqtmjpz4o0jZsnphE=
 github.com/LiuTangLei/tailscale v1.98.1/go.mod h1:mzv/rW7X/NNKbhDgCjQeegfktLrrCt7Psk2dd1J2XJ8=
+github.com/LiuTangLei/tailscale v1.98.2 h1:dspOZ94b2c0tJvoxNJig1n7HNhtmITQtafHXqX8IyqQ=
+github.com/LiuTangLei/tailscale v1.98.2/go.mod h1:ywkl8cKVa+AHI2vs9Wonq+XEza4uzoxB4QeCSVj55/Y=
 github.com/LiuTangLei/wireguard-go v0.0.20 h1:EMe1zldIzZ9hjQ6OtlQfTGRRbrqWsOLDd6d0JKirpY8=
 github.com/LiuTangLei/wireguard-go v0.0.20/go.mod h1:ATurAHkSecdqeNGRwzTynFOARLIc172YZeEFaSylNEg=
 github.com/akutz/memconn v0.1.0 h1:NawI0TORU4hcOMsMr11g7vwlCdkYeLKXBcxWu2W/P8A=
