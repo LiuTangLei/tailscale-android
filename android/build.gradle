@@ -11,7 +11,7 @@ buildscript {
         }
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.6.1'
+        classpath 'com.android.tools.build:gradle:8.13.0'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
         classpath "org.jetbrains.kotlin:kotlin-serialization:$kotlin_version"
         classpath("com.ncorti.ktfmt.gradle:plugin:0.17.0")
@@ -34,12 +34,30 @@ apply plugin: 'com.ncorti.ktfmt.gradle'
 def releaseSigning = getReleaseSigningConfig()
 
 android {
+    def androidApiLevel = providers.gradleProperty("androidApiLevel").get().toInteger()
+
     ndkVersion "23.1.7779620"
-    compileSdkVersion 34
+    compileSdkVersion androidApiLevel
     defaultConfig {
         minSdkVersion 26
-        targetSdkVersion 35
-        versionCode 576
+        targetSdkVersion androidApiLevel
+        // versionCode is stamped here by `make bump-version-code` (run via
+        // `make bumposs` / `make tag_release`) from wall-clock time: minutes
+        // since the Unix epoch, times 10. Time is a global, monotonically
+        // increasing authority, so releases cut from different branches never
+        // collide or go backwards -- unlike a counter stored in this file, which
+        // each branch would bump independently. (The Play Store requires
+        // versionCode to strictly increase across uploads, and stable point
+        // releases ship after higher-numbered unstable builds, so anything
+        // version-derived or per-branch eventually regresses.)
+        //
+        // This MUST stay a bare `versionCode <integer>` literal with no
+        // surrounding logic: external build tooling greps this line and parses
+        // the number directly. The last digit is reserved for the build variant;
+        // the Makefile's release-tv target rewrites this integer to end in 1 for
+        // AndroidTV builds so phone (...0) and TV (...1) uploads stay
+        // distinguishable in the Play Store.
+        versionCode 297646690
         versionName getVersionProperty("VERSION_LONG")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
@@ -93,16 +111,16 @@ android {
     buildTypes {
         applicationTest {
             initWith debug
-            manifestPlaceholders.leanbackRequired = false
+            manifestPlaceholders.leanbackRequired = isTV()
             buildConfigField "String", "GITHUB_USERNAME", "\"" + getLocalProperty("githubUsername", "")+"\""
             buildConfigField "String", "GITHUB_PASSWORD", "\"" + getLocalProperty("githubPassword", "")+"\""
             buildConfigField "String", "GITHUB_2FA_SECRET", "\"" + getLocalProperty("github2FASecret", "")+"\""
         }
         debug {
-            manifestPlaceholders.leanbackRequired = false
+            manifestPlaceholders.leanbackRequired = isTV()
         }
         release {
-            manifestPlaceholders.leanbackRequired = false
+            manifestPlaceholders.leanbackRequired = isTV()
 
             minifyEnabled true
 
@@ -116,10 +134,6 @@ android {
                 signingConfig signingConfigs.release
             }
         }
-        release_tv {
-            initWith release
-            manifestPlaceholders.leanbackRequired = true
-        }
     }
 
     testBuildType "applicationTest"
@@ -132,6 +146,7 @@ dependencies {
     implementation "androidx.browser:browser:1.8.0"
     implementation "androidx.security:security-crypto:1.1.0-alpha06"
     implementation "androidx.work:work-runtime:2.9.1"
+    implementation "androidx.work:work-runtime-ktx:2.9.1"
 
     // Kotlin dependencies.
     implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3"
@@ -188,6 +203,7 @@ dependencies {
     testImplementation 'org.mockito:mockito-core:5.12.0'
     testImplementation 'org.mockito:mockito-inline:5.2.0'
     testImplementation 'org.mockito.kotlin:mockito-kotlin:5.4.0'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1'
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -238,4 +254,8 @@ def getVersionProperty(key) {
     def versionProps = new Properties()
     versionProps.load(project.file('../tailscale.version').newDataInputStream())
     return versionProps.getProperty(key).replaceAll('^\"|\"$', '')
+}
+
+def isTV() {
+    return project.findProperty('PLATFORM')?.toString() == 'tv'
 }
