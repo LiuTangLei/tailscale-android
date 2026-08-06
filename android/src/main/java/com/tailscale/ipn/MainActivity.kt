@@ -386,7 +386,9 @@ class MainActivity : ComponentActivity() {
                   composable("awgViewer") { AwgConfigViewerView(backTo("settings")) }
                   composable("mdmSettings") { MDMSettingsDebugView(backTo("settings")) }
                   composable("managedBy") { ManagedByView(backTo("settings")) }
-                  composable("userSwitcher") { UserSwitcherView(userSwitcherNav) }
+                  composable("userSwitcher") {
+                    UserSwitcherView(userSwitcherNav, appViewModel = appViewModel)
+                  }
                   composable("permissions") {
                     PermissionsView(
                         backTo("settings"),

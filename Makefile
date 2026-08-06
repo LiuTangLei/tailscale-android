@@ -2,8 +2,8 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
-## For signed release build JKS_PASSWORD must be set to the password for the jks keystore
-## and JKS_PATH must be set to the path to the jks keystore.
+## For signed release builds JKS_PASSWORD must be set to the password for the JKS keystore
+## and JKS_PATH must be set to the path to the JKS keystore. JKS_ALIAS defaults to tailscale.
 
 # The docker image to use for the build environment.  Changing this
 # will force a rebuild of the docker image.  If there is an existing image
@@ -19,6 +19,9 @@ DOCKER_IMAGE := tailscale-android-build-amd64-072226-3
 # tailscale-android-integration-amd64-YYYYMMDD-N
 ANDROID_INTEGRATION_DOCKER_IMAGE := tailscale-android-integration-amd64-20260609-1
 export TS_USE_TOOLCHAIN=1
+# Release builds must resolve dependencies from this repository's go.mod. An inherited go.work
+# can otherwise replace the pinned Tailscale or wireguard-go modules without changing this tree.
+export GOWORK=off
 
 # If set, additional comma-separated build tags passed to the libtailscale Go
 # build to control feature selection.
@@ -39,6 +42,8 @@ ANDROID_BUILD_TOOLS_VERSION := $(shell grep '^androidBuildToolsVersion=' android
 DEBUG_APK := tailscale-debug.apk
 RELEASE_AAB := tailscale-release.aab
 RELEASE_TV_AAB := tailscale-tv-release.aab
+JKS_ALIAS ?= tailscale
+JKS_KEY_PASSWORD ?= $(JKS_PASSWORD)
 
 # Define output filenames.
 LIBTAILSCALE_AAR := android/libs/libtailscale.aar
@@ -92,15 +97,25 @@ $(info Using STRIP_TOOL: $(STRIP_TOOL))
 # predetermined location.
 ANDROID_STUDIO_ROOT ?= $(shell find ~/android-studio /usr/local/android-studio /opt/android-studio /Applications/Android\ Studio.app $(PROGRAMFILES)/Android/Android\ Studio -type d -maxdepth 1 2>/dev/null | head -n 1)
 
-# Set JAVA_HOME to the Android Studio bundled JDK.
+# Set JAVA_HOME to the Android Studio bundled JDK when the caller did not provide one.
 export JAVA_HOME ?= $(shell find "$(ANDROID_STUDIO_ROOT)/jbr" "$(ANDROID_STUDIO_ROOT)/jre" "$(ANDROID_STUDIO_ROOT)/Contents/jbr/Contents/Home" "$(ANDROID_STUDIO_ROOT)/Contents/jre/Contents/Home" -maxdepth 1 -type d 2>/dev/null | head -n 1)
 
-# Fallback to Homebrew OpenJDK if Android Studio JDK is unavailable.
-ifeq ($(JAVA_HOME),)
-	ifneq ($(wildcard /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home),)
-		export JAVA_HOME := /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
-	else ifneq ($(wildcard /usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home),)
-		export JAVA_HOME := /usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+# AGP 8 requires Java 17+. An inherited Java 11 JAVA_HOME must not prevent discovery of a usable
+# Android Studio JBR or Homebrew JDK.
+java_major = $(shell if [ -x "$(1)/bin/java" ]; then "$(1)/bin/java" -version 2>&1 | awk -F'[".]' '/version/ { if ($$2 == "1") print $$3; else print $$2; exit }'; fi)
+JAVA_HOME_MAJOR := $(call java_major,$(JAVA_HOME))
+JAVA_HOME_COMPATIBLE := $(shell if [ -n "$(JAVA_HOME_MAJOR)" ] && [ "$(JAVA_HOME_MAJOR)" -ge 17 ] 2>/dev/null; then echo yes; fi)
+
+ifneq ($(JAVA_HOME_COMPATIBLE),yes)
+	JAVA17_HOME := $(shell for candidate in "$(ANDROID_STUDIO_ROOT)/jbr" "$(ANDROID_STUDIO_ROOT)/jre" "$(ANDROID_STUDIO_ROOT)/Contents/jbr/Contents/Home" "$(ANDROID_STUDIO_ROOT)/Contents/jre/Contents/Home" "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" "/usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"; do \
+		if [ -x "$$candidate/bin/java" ]; then \
+			major=$$("$$candidate/bin/java" -version 2>&1 | awk -F'[".]' '/version/ { if ($$2 == "1") print $$3; else print $$2; exit }'); \
+			if [ -n "$$major" ] && [ "$$major" -ge 17 ] 2>/dev/null; then printf '%s' "$$candidate"; break; fi; \
+		fi; \
+	done)
+	ifneq ($(JAVA17_HOME),)
+		override JAVA_HOME := $(JAVA17_HOME)
+		export JAVA_HOME
 	endif
 endif
 
@@ -159,20 +174,20 @@ $(DEBUG_APK): libtailscale debug-symbols version gradle-dependencies build-unstr
 # Builds the release AAB and signs it (phone/tablet/chromeOS variant)
 .PHONY: release
 release: jarsign-env $(RELEASE_AAB)
-	@jarsigner -sigalg SHA256withRSA -digestalg SHA-256 -keystore $(JKS_PATH) -storepass $(JKS_PASSWORD) $(RELEASE_AAB) tailscale
+	@jarsigner -sigalg SHA256withRSA -digestalg SHA-256 -keystore $(JKS_PATH) -storepass $(JKS_PASSWORD) -keypass $(JKS_KEY_PASSWORD) $(RELEASE_AAB) $(JKS_ALIAS)
 
 # Builds the release AAB and signs it (androidTV variant)
 .PHONY: release-tv
 release-tv: jarsign-env $(RELEASE_TV_AAB)
-	@jarsigner -sigalg SHA256withRSA -digestalg SHA-256 -keystore $(JKS_PATH) -storepass $(JKS_PASSWORD) $(RELEASE_TV_AAB) tailscale
+	@jarsigner -sigalg SHA256withRSA -digestalg SHA-256 -keystore $(JKS_PATH) -storepass $(JKS_PASSWORD) -keypass $(JKS_KEY_PASSWORD) $(RELEASE_TV_AAB) $(JKS_ALIAS)
 
 # gradle-dependencies groups together the android sources and libtailscale needed to assemble tests/debug/release builds.
 .PHONY: gradle-dependencies
-gradle-dependencies: $(shell find android -type f -not -path "android/build/*" -not -path "android/libs/*" -not -path '*/.*') $(LIBTAILSCALE_AAR) tailscale.version
+gradle-dependencies: check-java $(shell find android -type f -not -path "android/build/*" -not -path "android/libs/*" -not -path '*/.*') $(LIBTAILSCALE_AAR) tailscale.version
 
 $(RELEASE_AAB): version gradle-dependencies
 	@echo "Building release AAB"
-	(cd android && ./gradlew test bundleRelease)
+	(cd android && ./gradlew test bundleRelease -PdisableReleaseSigning=true)
 	install -C ./android/build/outputs/bundle/release/android-release.aab $@
 
 # PLATFORM=tv signals to gradle that we should build for AndroidTV. The stamped
@@ -191,7 +206,7 @@ $(RELEASE_TV_AAB): version gradle-dependencies
 		trap "sed -i.bak -E 's/versionCode [0-9]+/versionCode $$ORIG_VC/' android/build.gradle && rm -f android/build.gradle.bak" EXIT INT TERM HUP; \
 		sed -i.bak -E "s/versionCode [0-9]+/versionCode $$TV_VC/" android/build.gradle; \
 		rm -f android/build.gradle.bak; \
-		(cd android && ./gradlew test bundleRelease -PPLATFORM=tv)
+		(cd android && ./gradlew test bundleRelease -PPLATFORM=tv -PdisableReleaseSigning=true)
 	install -C ./android/build/outputs/bundle/release/android-release.aab $@
 
 tailscale-test.apk: version gradle-dependencies
@@ -199,7 +214,7 @@ tailscale-test.apk: version gradle-dependencies
 	install -C ./android/build/outputs/apk/androidTest/applicationTest/android-applicationTest-androidTest.apk $@
 
 tailscale.version: go.mod go.sum go.toolchain.rev $(wildcard .git/HEAD)
-	@bash -c "./tool/go run tailscale.com/cmd/mkversion > tailscale.version"
+	@bash -c "GOFLAGS='-mod=readonly' ./tool/go run tailscale.com/cmd/mkversion > tailscale.version"
 
 .PHONY: version
 version: tailscale.version
@@ -216,20 +231,20 @@ $(GOBIN):
 	mkdir -p $(GOBIN)
 
 $(GOBIN)/gomobile: $(GOBIN)/gobind go.mod go.sum go.toolchain.rev | $(GOBIN)
-	./tool/go install golang.org/x/mobile/cmd/gomobile
+	GOFLAGS='-mod=readonly' ./tool/go install golang.org/x/mobile/cmd/gomobile
 
 $(GOBIN)/gobind: go.mod go.sum go.toolchain.rev
-	./tool/go install golang.org/x/mobile/cmd/gobind
+	GOFLAGS='-mod=readonly' ./tool/go install golang.org/x/mobile/cmd/gobind
 
 .PHONY: build-unstripped-aar
-build-unstripped-aar: tailscale.version $(GOBIN)/gomobile
+build-unstripped-aar: check-java tailscale.version $(GOBIN)/gomobile
 	@echo "Running gomobile bind to generate unstripped AAR..."
 	@echo "Output file: $(ABS_UNSTRIPPED_AAR)"
 	mkdir -p $(dir $(ABS_UNSTRIPPED_AAR))
 	rm -f $(ABS_UNSTRIPPED_AAR)
 	# The -linkmode=external -extldflags=-Wl,-z,max-page-size=16384 is specific to NDK 23
 	# to support 16kb page sizes.  Your mileage may vary with other NDK versions.
-	GOFLAGS='-mod=mod' $(GOBIN)/gomobile bind -target android -androidapi 26 \
+	GOFLAGS='-mod=readonly' $(GOBIN)/gomobile bind -target android -androidapi 26 \
 		-tags "$$(./build-tags.sh) $(GOMOBILE_BUILD_TAGS)" \
 		-ldflags "-linkmode=external -extldflags=-Wl,-z,max-page-size=16384 $$(./version-ldflags.sh)" \
 		-o $(ABS_UNSTRIPPED_AAR) ./libtailscale || { echo "gomobile bind failed"; exit 1; }
@@ -288,6 +303,14 @@ env:
 	@echo "JAVA_HOME=$(JAVA_HOME)"
 	@echo "TOOLCHAINDIR=$(TOOLCHAINDIR)"
 	@echo "AVD_IMAGE=$(AVD_IMAGE)"
+
+.PHONY: check-java
+check-java:
+	@major="$$("$(JAVA_HOME)/bin/java" -version 2>&1 | awk -F'[".]' '/version/ { if ($$2 == "1") print $$3; else print $$2; exit }')"; \
+	if [ -z "$$major" ] || [ "$$major" -lt 17 ] 2>/dev/null; then \
+		echo "Android builds require Java 17 or newer; JAVA_HOME=$(JAVA_HOME)" >&2; \
+		exit 1; \
+	fi
 
 # Ensure that JKS_PATH and JKS_PASSWORD are set before we attempt a build
 # that requires signing.
@@ -510,9 +533,14 @@ help: ## Show this help
 
 # Build a signed release APK (signing config is in android/build.gradle)
 .PHONY: release-signed
-release-signed: libtailscale version gradle-dependencies ## Build a signed release APK
+release-signed: jarsign-env libtailscale version gradle-dependencies ## Build a signed release APK
 	@echo "Building signed release APK"
-	(cd android && ./gradlew assembleRelease)
+	@cd android && \
+		TAILSCALE_ANDROID_KEYSTORE_PATH="$(abspath $(JKS_PATH))" \
+		TAILSCALE_ANDROID_KEYSTORE_PASSWORD="$(JKS_PASSWORD)" \
+		TAILSCALE_ANDROID_KEY_ALIAS="$(JKS_ALIAS)" \
+		TAILSCALE_ANDROID_KEY_PASSWORD="$(JKS_KEY_PASSWORD)" \
+		./gradlew test assembleRelease
 	install -C ./android/build/outputs/apk/release/android-release.apk tailscale-release-signed.apk
 	@echo "Signed release APK saved as tailscale-release-signed.apk"
 

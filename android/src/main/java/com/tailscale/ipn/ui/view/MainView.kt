@@ -578,8 +578,10 @@ fun PeerList(
   var isListFocussed by remember { mutableStateOf(false) }
   val expandedPeer = viewModel.expandedMenuPeer.collectAsState()
   val localClipboardManager = LocalClipboardManager.current
-  val awgStatus by viewModel.awgPeersStatus.collectAsState()
+  val awgPeersData by viewModel.awgPeersData.collectAsState()
   val awgSyncInProgress by viewModel.awgSyncInProgress.collectAsState()
+  val awgProfileMutationInProgress by viewModel.awgProfileMutationInProgress.collectAsState()
+  val awgProfileSyncReady by viewModel.awgProfileSyncReady.collectAsState()
   val localAwgStatus by viewModel.localAwgStatus.collectAsState()
   // Restrict search to devices running API 33+ (see https://github.com/tailscale/corp/issues/27375)
   val enableSearch = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
@@ -689,7 +691,7 @@ fun PeerList(
                           if (isSelfNode) {
                             localAwgStatus // Use local AWG status for self node
                           } else {
-                            viewModel.hasAwgConfigForPeer(peer, awgStatus)
+                            viewModel.hasAwgConfigForPeer(peer, awgPeersData)
                           }
 
                       if (hasAwgConfig) {
@@ -706,11 +708,17 @@ fun PeerList(
                           Spacer(modifier = Modifier.size(2.dp))
                           Button(
                               onClick = { viewModel.syncAwgConfigFromPeer(peer) },
-                              enabled = awgSyncInProgress != peer.StableID,
+                              // Applying prefs is process-wide. Disable every peer action until the
+                              // active request completes so two callbacks cannot race to become the
+                              // final local configuration.
+                              enabled =
+                                  awgSyncInProgress == null &&
+                                      awgProfileMutationInProgress == null &&
+                                      awgProfileSyncReady,
                               modifier = Modifier.height(28.dp),
                               contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                           ) {
-                            if (awgSyncInProgress == peer.StableID) {
+                            if (awgSyncInProgress?.peerStableID == peer.StableID) {
                               CircularProgressIndicator(
                                   modifier = Modifier.size(16.dp),
                                   strokeWidth = 2.dp,

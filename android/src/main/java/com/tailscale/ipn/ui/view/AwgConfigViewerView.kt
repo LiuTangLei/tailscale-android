@@ -49,7 +49,11 @@ fun AwgConfigViewerView(
 ) {
   val configJson by viewModel.configJson.collectAsState()
   val isLoading by viewModel.isLoading.collectAsState()
-  val isClearing by viewModel.isClearing.collectAsState()
+  val awgWriteInProgress by viewModel.awgWriteInProgress.collectAsState()
+  val awgProfileMutationInProgress by viewModel.awgProfileMutationInProgress.collectAsState()
+  val awgProfileSyncReady by viewModel.awgProfileSyncReady.collectAsState()
+  val isClearing =
+      awgWriteInProgress != null || awgProfileMutationInProgress != null || !awgProfileSyncReady
   val loadError by viewModel.loadError.collectAsState()
   val context = LocalContext.current
   val clipboardManager = LocalClipboardManager.current
@@ -62,6 +66,10 @@ fun AwgConfigViewerView(
         text = { Text("Clear the AWG profile and return this device to standard WireGuard?") },
         confirmButton = {
           TextButton(
+              enabled =
+                  awgWriteInProgress == null &&
+                      awgProfileMutationInProgress == null &&
+                      awgProfileSyncReady,
               onClick = {
                 showClearConfirm = false
                 viewModel.clearAwgConfig(

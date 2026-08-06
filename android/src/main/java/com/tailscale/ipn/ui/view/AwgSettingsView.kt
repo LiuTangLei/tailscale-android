@@ -44,7 +44,11 @@ fun AwgSettingsView(
     viewModel: AwgSettingsViewModel = viewModel(),
 ) {
   val currentConfig by viewModel.currentConfig.collectAsState()
-  val isLoading by viewModel.isLoading.collectAsState()
+  val awgWriteInProgress by viewModel.awgWriteInProgress.collectAsState()
+  val awgProfileMutationInProgress by viewModel.awgProfileMutationInProgress.collectAsState()
+  val awgProfileSyncReady by viewModel.awgProfileSyncReady.collectAsState()
+  val isLoading =
+      awgWriteInProgress != null || awgProfileMutationInProgress != null || !awgProfileSyncReady
   val generatedProfileVersion by viewModel.generatedProfileVersion.collectAsState()
   val statusMessage by viewModel.statusMessage.collectAsState()
   val context = LocalContext.current

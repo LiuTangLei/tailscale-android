@@ -5,6 +5,7 @@ package com.tailscale.ipn.ui.viewModel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.tailscale.ipn.App
 import com.tailscale.ipn.UninitializedApp
 import com.tailscale.ipn.mdm.MDMSettings
 import com.tailscale.ipn.ui.localapi.Client
@@ -149,6 +150,36 @@ open class IpnViewModel : ViewModel() {
 
   // Login/Logout
 
+  private data class ProfileMutationLease(
+      val operation: AwgProfileMutationOperation,
+      val previousAwgStatus: Boolean,
+      val invalidatedProfile: Boolean,
+  )
+
+  private fun beginProfileMutation(invalidateProfile: Boolean = true): ProfileMutationLease? {
+    val appViewModel = App.get().getAppScopedViewModel()
+    val previousAwgStatus = appViewModel.localAwgConfigured.value
+    val operation =
+        appViewModel.tryBeginAwgProfileMutation(invalidateProfile = invalidateProfile)
+            ?: return null
+    return ProfileMutationLease(operation, previousAwgStatus, invalidateProfile)
+  }
+
+  /** Returns false for an obsolete callback that no longer owns the application-scoped token. */
+  private fun finishProfileMutation(lease: ProfileMutationLease, result: Result<*>): Boolean {
+    val appViewModel = App.get().getAppScopedViewModel()
+    if (!appViewModel.finishAwgProfileMutation(lease.operation, result.isSuccess)) return false
+    if (result.isFailure &&
+        lease.invalidatedProfile &&
+        lease.operation.profileGeneration == appViewModel.awgProfileGeneration) {
+      appViewModel.setLocalAwgConfigured(lease.previousAwgStatus)
+    }
+    return true
+  }
+
+  private fun profileMutationBusyError() =
+      IllegalStateException("Wait for the current account or AWG configuration update to finish")
+
   /**
    * Order of operations:
    * 1. editPrefs() with maskedPrefs (to allow ControlURL override), LoggedOut=false if AuthKey !=
@@ -167,12 +198,30 @@ open class IpnViewModel : ViewModel() {
       authKey: String? = null,
       completionHandler: (Result<Unit>) -> Unit = {}
   ) {
+    val mutation = beginProfileMutation()
+    if (mutation == null) {
+      completionHandler(Result.failure(profileMutationBusyError()))
+      return
+    }
+    performLogin(maskedPrefs, authKey, mutation, completionHandler)
+  }
+
+  private fun performLogin(
+      maskedPrefs: Ipn.MaskedPrefs?,
+      authKey: String?,
+      mutation: ProfileMutationLease,
+      completionHandler: (Result<Unit>) -> Unit,
+  ) {
+    val appViewModel = App.get().getAppScopedViewModel()
+    val finish: (Result<Unit>) -> Unit = { result ->
+      if (finishProfileMutation(mutation, result)) completionHandler(result)
+    }
     // Start the IPNService foreground notification so that Android
     // does not freeze the process or cut network access while the user is in the browser
     // completing auth. The foreground service transitions to a full VPN service later when
     // startVPN() is called after the backend reaches Running state.
     UninitializedApp.get().startForegroundForLogin()
-    val client = Client(viewModelScope)
+    val client = Client(appViewModel.viewModelScope)
 
     val finalMaskedPrefs = maskedPrefs?.deepCopy() ?: Ipn.MaskedPrefs()
     // Don't set WantRunning=true here. Setting it in editPrefs() triggers cc.Login(LoginDefault)
@@ -190,7 +239,7 @@ open class IpnViewModel : ViewModel() {
       editResult
           .onFailure {
             TSLog.e(TAG, "editPrefs() failed: ${it.message}")
-            completionHandler(Result.failure(it))
+            finish(Result.failure(it))
           }
           .onSuccess {
             it.WantRunning = true
@@ -199,16 +248,16 @@ open class IpnViewModel : ViewModel() {
               startResult
                   .onFailure {
                     TSLog.e(TAG, "start() failed: ${it.message}")
-                    completionHandler(Result.failure(it))
+                    finish(Result.failure(it))
                   }
                   .onSuccess {
                     client.startLoginInteractive { loginResult ->
                       loginResult
                           .onFailure {
                             TSLog.e(TAG, "startLoginInteractive() failed: ${it.message}")
-                            completionHandler(Result.failure(it))
+                            finish(Result.failure(it))
                           }
-                          .onSuccess { completionHandler(Result.success(Unit)) }
+                          .onSuccess { finish(Result.success(Unit)) }
                     }
                   }
             }
@@ -232,7 +281,14 @@ open class IpnViewModel : ViewModel() {
   }
 
   fun logout(completionHandler: (Result<String>) -> Unit = {}) {
-    Client(viewModelScope).logout { result ->
+    val mutation = beginProfileMutation()
+    if (mutation == null) {
+      completionHandler(Result.failure(profileMutationBusyError()))
+      return
+    }
+    val appViewModel = App.get().getAppScopedViewModel()
+    Client(appViewModel.viewModelScope).logout callback@{ result ->
+      if (!finishProfileMutation(mutation, result)) return@callback
       result
           .onSuccess { TSLog.d(TAG, "Logout started: $it") }
           .onFailure { TSLog.e(TAG, "Error starting logout: ${it.message}") }
@@ -257,31 +313,67 @@ open class IpnViewModel : ViewModel() {
   }
 
   fun switchProfile(profile: IpnLocal.LoginProfile, completionHandler: (Result<String>) -> Unit) {
+    val mutation = beginProfileMutation()
+    if (mutation == null) {
+      completionHandler(Result.failure(profileMutationBusyError()))
+      return
+    }
+    val appViewModel = App.get().getAppScopedViewModel()
     val switchProfile = {
-      Client(viewModelScope).switchProfile(profile) {
+      Client(appViewModel.viewModelScope).switchProfile(profile) switchRequest@{ result ->
+        if (!finishProfileMutation(mutation, result)) return@switchRequest
         startVPN()
-        completionHandler(it)
+        completionHandler(result)
       }
     }
-    Client(viewModelScope).editPrefs(Ipn.MaskedPrefs().apply { WantRunning = false }) { result ->
+    Client(appViewModel.viewModelScope).editPrefs(
+        Ipn.MaskedPrefs().apply { WantRunning = false }) editPrefsRequest@{ result ->
       result
           .onSuccess { switchProfile() }
-          .onFailure { TSLog.e(TAG, "Error setting wantRunning to false: ${it.message}") }
+          .onFailure {
+            if (!finishProfileMutation(mutation, result)) return@editPrefsRequest
+            TSLog.e(TAG, "Error setting wantRunning to false: ${it.message}")
+            completionHandler(Result.failure(it))
+          }
     }
   }
 
   fun addProfile(completionHandler: (Result<String>) -> Unit) {
-    Client(viewModelScope).addProfile {
-      if (it.isSuccess) {
-        login()
-      }
-      startVPN()
-      completionHandler(it)
+    val mutation = beginProfileMutation()
+    if (mutation == null) {
+      completionHandler(Result.failure(profileMutationBusyError()))
+      return
+    }
+    val appViewModel = App.get().getAppScopedViewModel()
+    Client(appViewModel.viewModelScope).addProfile addProfileRequest@{ addResult ->
+      addResult
+          .onFailure {
+            if (!finishProfileMutation(mutation, addResult)) return@addProfileRequest
+            startVPN()
+            completionHandler(addResult)
+          }
+          .onSuccess {
+            performLogin(maskedPrefs = null, authKey = null, mutation = mutation) { loginResult ->
+              startVPN()
+              if (loginResult.isSuccess) {
+                completionHandler(addResult)
+              } else {
+                completionHandler(Result.failure(loginResult.exceptionOrNull()!!))
+              }
+            }
+          }
     }
   }
 
   fun deleteProfile(profile: IpnLocal.LoginProfile, completionHandler: (Result<String>) -> Unit) {
-    Client(viewModelScope).deleteProfile(profile) {
+    val mutation = beginProfileMutation(invalidateProfile = false)
+    if (mutation == null) {
+      completionHandler(Result.failure(profileMutationBusyError()))
+      return
+    }
+    val appViewModel = App.get().getAppScopedViewModel()
+    Client(appViewModel.viewModelScope).deleteProfile(profile) deleteProfileRequest@{
+      if (!finishProfileMutation(mutation, it)) return@deleteProfileRequest
       viewModelScope.launch { loadUserProfiles() }
       completionHandler(it)
     }

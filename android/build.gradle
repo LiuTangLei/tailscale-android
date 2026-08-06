@@ -31,7 +31,11 @@ apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.plugin.serialization'
 apply plugin: 'com.ncorti.ktfmt.gradle'
 
-def releaseSigning = getReleaseSigningConfig()
+// Normal upstream/CI release builds stay unsigned because there are no implicit credentials. The
+// Makefile's externally signed AAB path disables this explicitly to prevent accidental double
+// signing when a developer also has Gradle signing properties configured.
+def releaseSigningDisabled = project.findProperty("disableReleaseSigning")?.toString()?.toBoolean() ?: false
+def releaseSigning = releaseSigningDisabled ? null : getReleaseSigningConfig()
 
 android {
     def androidApiLevel = providers.gradleProperty("androidApiLevel").get().toInteger()
@@ -228,21 +232,28 @@ def getEnvOrLocalProperty(envKey, localKey, defaultValue) {
 }
 
 def getReleaseSigningConfig() {
-    def storeFilePath = getEnvOrLocalProperty("TAILSCALE_ANDROID_KEYSTORE_PATH", "tailscale.signing.storeFile", "../my-release-key.keystore")
-    if (storeFilePath == null || storeFilePath.trim().isEmpty()) {
+    def storeFilePath = getEnvOrLocalProperty("TAILSCALE_ANDROID_KEYSTORE_PATH", "tailscale.signing.storeFile", "")
+    def storePassword = getEnvOrLocalProperty("TAILSCALE_ANDROID_KEYSTORE_PASSWORD", "tailscale.signing.storePassword", "")
+    def keyAlias = getEnvOrLocalProperty("TAILSCALE_ANDROID_KEY_ALIAS", "tailscale.signing.keyAlias", "")
+    def keyPassword = getEnvOrLocalProperty("TAILSCALE_ANDROID_KEY_PASSWORD", "tailscale.signing.keyPassword", "")
+    def values = [storeFilePath, storePassword, keyAlias, keyPassword]
+    if (values.every { it == null || it.trim().isEmpty() }) {
         return null
+    }
+    if (values.any { it == null || it.trim().isEmpty() }) {
+        throw new GradleException("Release signing was enabled, but keystore path, passwords, or key alias are missing")
     }
 
     def storeFile = project.file(storeFilePath)
     if (!storeFile.exists()) {
-        return null
+        throw new GradleException("Release signing keystore does not exist: ${storeFile}")
     }
 
     return [
             storeFile: storeFile,
-            storePassword: getEnvOrLocalProperty("TAILSCALE_ANDROID_KEYSTORE_PASSWORD", "tailscale.signing.storePassword", "123456"),
-            keyAlias: getEnvOrLocalProperty("TAILSCALE_ANDROID_KEY_ALIAS", "tailscale.signing.keyAlias", "my-key-alias"),
-            keyPassword: getEnvOrLocalProperty("TAILSCALE_ANDROID_KEY_PASSWORD", "tailscale.signing.keyPassword", "123456"),
+            storePassword: storePassword,
+            keyAlias: keyAlias,
+            keyPassword: keyPassword,
     ]
 }
 

@@ -14,10 +14,13 @@ import com.tailscale.ipn.ui.model.MagicHeaderRange
 import com.tailscale.ipn.util.TSLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 class AwgSettingsViewModel : IpnViewModel() {
+  private val appViewModel = App.get().getAppScopedViewModel()
+
   private val _currentConfig = MutableStateFlow<AmneziaWGPrefs?>(null)
   val currentConfig: StateFlow<AmneziaWGPrefs?> = _currentConfig
 
@@ -61,8 +64,10 @@ class AwgSettingsViewModel : IpnViewModel() {
   private val _statusMessage = MutableStateFlow<String?>(null)
   val statusMessage: StateFlow<String?> = _statusMessage
 
-  private val _isLoading = MutableStateFlow(false)
-  val isLoading: StateFlow<Boolean> = _isLoading
+  val awgWriteInProgress: StateFlow<AwgWriteOperation?> = appViewModel.awgWriteInProgress
+  val awgProfileMutationInProgress: StateFlow<AwgProfileMutationOperation?> =
+      appViewModel.awgProfileMutationInProgress
+  val awgProfileSyncReady: StateFlow<Boolean> = appViewModel.awgProfileSyncReady
 
   private val _generatedProfileVersion = MutableStateFlow<AwgProfileVersion?>(null)
   val generatedProfileVersion: StateFlow<AwgProfileVersion?> = _generatedProfileVersion
@@ -78,14 +83,17 @@ class AwgSettingsViewModel : IpnViewModel() {
   }
 
   fun loadCurrentConfig() {
-    Client(viewModelScope).getLocalPrefs { result ->
+    val prefsReadToken = appViewModel.beginAwgPrefsRead(AwgPrefsReader.SETTINGS)
+    Client(viewModelScope).getLocalPrefs prefsRequest@{ result ->
+      if (!appViewModel.isCurrentAwgPrefsRead(prefsReadToken)) return@prefsRequest
       result
           .onSuccess { prefs ->
             val config = prefs.AmneziaWG
+            if (!appViewModel.commitLocalAwgStatus(
+                prefsReadToken, config?.hasNonDefaultValues() == true)) {
+              return@prefsRequest
+            }
             _currentConfig.value = config
-            App.get()
-                .getAppScopedViewModel()
-                .setLocalAwgConfigured(config?.hasNonDefaultValues() == true)
             config?.let(::populateFieldsFromConfig)
           }
           .onFailure { error ->
@@ -242,14 +250,25 @@ class AwgSettingsViewModel : IpnViewModel() {
       _statusMessage.value = it
       return
     }
-    _isLoading.value = true
+    val writeOperation = appViewModel.tryBeginAwgWrite()
+    if (writeOperation == null) {
+      _statusMessage.value = "An account or AWG configuration update is already in progress"
+      return
+    }
     val maskedPrefs = Ipn.MaskedPrefs().also { it.AmneziaWG = config }
-    Client(viewModelScope).editPrefs(maskedPrefs) { result ->
+    Client(appViewModel.viewModelScope).editPrefs(maskedPrefs) { result ->
+      if (!appViewModel.finishAwgWrite(
+          operation = writeOperation,
+          writeSucceeded = result.isSuccess,
+          localAwgConfiguredOnSuccess = config.hasNonDefaultValues(),
+      )) {
+        return@editPrefs
+      }
+      if (!viewModelScope.isActive) return@editPrefs
       result
           .onSuccess {
             _currentConfig.value = config
             _generatedProfileVersion.value = null
-            App.get().getAppScopedViewModel().setLocalAwgConfigured(config.hasNonDefaultValues())
             _statusMessage.value =
                 if (config.hasNonDefaultValues()) {
                   "${config.versionLabel()} applied; peers must use matching S/H/key parameters"
@@ -264,7 +283,6 @@ class AwgSettingsViewModel : IpnViewModel() {
             TSLog.e(TAG, "Failed to apply AWG config: ${error.message}")
             _statusMessage.value = "Failed to apply AWG config: ${error.message}"
           }
-      _isLoading.value = false
     }
   }
 

@@ -44,6 +44,7 @@ import com.tailscale.ipn.R
 import com.tailscale.ipn.ui.util.Lists
 import com.tailscale.ipn.ui.util.itemsWithDividers
 import com.tailscale.ipn.ui.util.set
+import com.tailscale.ipn.ui.viewModel.AppViewModel
 import com.tailscale.ipn.ui.viewModel.UserSwitcherViewModel
 
 data class UserSwitcherNav(
@@ -55,7 +56,11 @@ data class UserSwitcherNav(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun UserSwitcherView(nav: UserSwitcherNav, viewModel: UserSwitcherViewModel = viewModel()) {
+fun UserSwitcherView(
+    nav: UserSwitcherNav,
+    viewModel: UserSwitcherViewModel = viewModel(),
+    appViewModel: AppViewModel = viewModel(),
+) {
   val users by viewModel.loginProfiles.collectAsState()
   val currentUser by viewModel.loggedInUser.collectAsState()
   val showHeaderMenu by viewModel.showHeaderMenu.collectAsState()
@@ -64,6 +69,9 @@ fun UserSwitcherView(nav: UserSwitcherNav, viewModel: UserSwitcherViewModel = vi
   val netmapState by viewModel.netmap.collectAsState()
   val capabilityIsOwner = "https://tailscale.com/cap/is-owner"
   val isOwner = netmapState?.hasCap(capabilityIsOwner) == true
+  val awgWriteInProgress by appViewModel.awgWriteInProgress.collectAsState()
+  val awgProfileMutationInProgress by appViewModel.awgProfileMutationInProgress.collectAsState()
+  val profileActionsEnabled = awgWriteInProgress == null && awgProfileMutationInProgress == null
 
   Scaffold(
       topBar = {
@@ -75,7 +83,8 @@ fun UserSwitcherView(nav: UserSwitcherNav, viewModel: UserSwitcherViewModel = vi
                 FusMenu(
                     viewModel = viewModel,
                     onAuthKeyClick = nav.onNavigateToAuthKey,
-                    onCustomClick = nav.onNavigateCustomControl)
+                    onCustomClick = nav.onNavigateCustomControl,
+                    enabled = profileActionsEnabled)
                 IconButton(onClick = { viewModel.showHeaderMenu.set(!showHeaderMenu) }) {
                   Icon(Icons.Default.MoreVert, "menu")
                 }
@@ -111,38 +120,51 @@ fun UserSwitcherView(nav: UserSwitcherNav, viewModel: UserSwitcherViewModel = vi
                     UserView(
                         profile = user,
                         actionState = state,
-                        onClick = {
-                          nextUserId.value = user.ID
-                          viewModel.switchProfile(user) {
-                            if (it.isFailure) {
-                              viewModel.errorDialog.set(ErrorDialogType.LOGOUT_FAILED)
-                              nextUserId.value = null
+                        onClick =
+                            if (profileActionsEnabled) {
+                              {
+                                nextUserId.value = user.ID
+                                viewModel.switchProfile(user) {
+                                  if (it.isFailure) {
+                                    viewModel.errorDialog.set(ErrorDialogType.LOGOUT_FAILED)
+                                    nextUserId.value = null
+                                  } else {
+                                    nav.onNavigateHome()
+                                  }
+                                }
+                              }
                             } else {
-                              nav.onNavigateHome()
-                            }
-                          }
-                        })
+                              null
+                            })
                   }
                 }
 
                 item {
                   Lists.SectionDivider()
-                  Setting.Text(R.string.add_account) {
-                    viewModel.addProfile {
-                      if (it.isFailure) {
-                        viewModel.errorDialog.set(ErrorDialogType.ADD_PROFILE_FAILED)
-                      }
-                    }
-                  }
+                  Setting.Text(
+                      R.string.add_account,
+                      enabled = profileActionsEnabled,
+                      onClick = {
+                        viewModel.addProfile {
+                          if (it.isFailure) {
+                            viewModel.errorDialog.set(ErrorDialogType.ADD_PROFILE_FAILED)
+                          }
+                        }
+                      })
 
                   Lists.ItemDivider()
-                  Setting.Text(R.string.reauthenticate) { viewModel.login() }
+                  Setting.Text(
+                      R.string.reauthenticate,
+                      enabled = profileActionsEnabled,
+                      onClick = { viewModel.login() },
+                  )
 
                   if (currentUser != null) {
                     Lists.ItemDivider()
                     Setting.Text(
                         R.string.log_out,
                         destructive = true,
+                        enabled = profileActionsEnabled,
                         onClick = {
                           viewModel.logout {
                             it.onSuccess { nav.onNavigateHome() }
@@ -196,7 +218,8 @@ fun UserSwitcherView(nav: UserSwitcherNav, viewModel: UserSwitcherViewModel = vi
 fun FusMenu(
     onCustomClick: () -> Unit,
     onAuthKeyClick: () -> Unit,
-    viewModel: UserSwitcherViewModel
+    viewModel: UserSwitcherViewModel,
+    enabled: Boolean = true,
 ) {
   val expanded by viewModel.showHeaderMenu.collectAsState()
 
@@ -209,12 +232,14 @@ fun FusMenu(
               onCustomClick()
               viewModel.showHeaderMenu.set(false)
             },
+            enabled = enabled,
             text = stringResource(id = R.string.custom_control_menu))
         MenuItem(
             onClick = {
               onAuthKeyClick()
               viewModel.showHeaderMenu.set(false)
             },
+            enabled = enabled,
             text = stringResource(id = R.string.auth_key_menu))
       }
 }
@@ -244,9 +269,10 @@ fun OwnerDeleteDialogText() {
 }
 
 @Composable
-fun MenuItem(text: String, onClick: () -> Unit) {
+fun MenuItem(text: String, enabled: Boolean = true, onClick: () -> Unit) {
   DropdownMenuItem(
       modifier = Modifier.padding(horizontal = 8.dp, vertical = 0.dp),
+      enabled = enabled,
       onClick = onClick,
       text = { Text(text = text) })
 }

@@ -22,6 +22,7 @@ import com.tailscale.ipn.ui.model.AwgPeerResult
 import com.tailscale.ipn.ui.model.AwgRefreshFeedback
 import com.tailscale.ipn.ui.model.Ipn
 import com.tailscale.ipn.ui.model.Ipn.State
+import com.tailscale.ipn.ui.model.Netmap
 import com.tailscale.ipn.ui.model.Tailcfg
 import com.tailscale.ipn.ui.model.awgRefreshMessage
 import com.tailscale.ipn.ui.notifier.Notifier
@@ -34,11 +35,15 @@ import java.time.Duration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+private val AWG_REFRESH_RETRY_DELAYS_MILLIS = longArrayOf(2_000L, 5_000L)
 
 class MainViewModelFactory(private val appViewModel: AppViewModel) : ViewModelProvider.Factory {
   @Suppress("UNCHECKED_CAST")
@@ -110,45 +115,25 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
   private val _awgPeersData = MutableStateFlow<Map<String, AwgPeerResult>>(emptyMap())
   val awgPeersData: StateFlow<Map<String, AwgPeerResult>> = _awgPeersData
 
-  // AWG sync operation status
-  private val _awgSyncInProgress = MutableStateFlow<String?>(null) // hostname of peer being synced
-  val awgSyncInProgress: StateFlow<String?> = _awgSyncInProgress
+  // Every AWG prefs writer shares the application-scoped operation lock.
+  val awgSyncInProgress: StateFlow<AwgWriteOperation?> = appViewModel.awgWriteInProgress
+  val awgProfileMutationInProgress: StateFlow<AwgProfileMutationOperation?> =
+      appViewModel.awgProfileMutationInProgress
+  val awgProfileSyncReady: StateFlow<Boolean> = appViewModel.awgProfileSyncReady
 
   private var awgPeersLoading = false
-  private var awgPeerFingerprint = ""
+  private var awgPeerFingerprint: String? = null
+  private var awgRefreshPending = false
+  private var awgPendingFeedback = AwgRefreshFeedback.SILENT
+  private var awgSilentRetryAttempt = 0
+  private var awgRetryJob: Job? = null
+  private var awgTopologyAvailable = false
+  private var awgTopologyGeneration = 0L
+  private var awgProfileIdentity: String? = null
+  private var awgPeersProfileGeneration: Long? = null
 
   // Local machine AWG configuration status
   val localAwgStatus: StateFlow<Boolean> = appViewModel.localAwgConfigured
-
-  private fun normalizePeerKey(value: String): String =
-      value.trim().trimEnd('.').substringBefore('.').lowercase()
-
-  private fun peerKeyCandidates(value: String): List<String> {
-    val trimmed = value.trim().trimEnd('.')
-    val short = trimmed.substringBefore('.')
-    return listOf(trimmed, trimmed.lowercase(), short, short.lowercase(), normalizePeerKey(trimmed))
-        .filter(String::isNotEmpty)
-        .distinct()
-  }
-
-  private fun peerKeyCandidates(peer: Tailcfg.Node): List<String> =
-      buildList {
-            add(peer.Key)
-            peer.primaryIPv4Address?.let(::add)
-            addAll(peerKeyCandidates(peer.Hostinfo.Hostname ?: peer.ComputedName ?: peer.Name))
-            addAll(peerKeyCandidates(peer.Name))
-          }
-          .filter(String::isNotEmpty)
-          .distinct()
-
-  private fun resultKeyCandidates(peer: AwgPeerResult): List<String> =
-      buildList {
-            add(peer.nodeKey)
-            peer.tailscaleIP?.let(::add)
-            addAll(peerKeyCandidates(peer.hostname))
-          }
-          .filter(String::isNotEmpty)
-          .distinct()
 
   fun updateSearchTerm(term: String) {
     _searchTerm.value = term
@@ -212,37 +197,63 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
       }
     }
     viewModelScope.launch {
-      Notifier.netmap.collect { it ->
-        it?.let { netmap ->
-          searchJob?.cancel()
-          launch(Dispatchers.Default) {
-            peerCategorizer.regenerateGroupedPeers(netmap)
-            val filteredPeers = peerCategorizer.groupedAndFilteredPeers(searchTerm.value)
-            _peers.value = peerCategorizer.peerSets
-            _searchViewPeers.value = filteredPeers
+      var observedProfileGeneration = appViewModel.awgProfileGeneration
+      appViewModel.awgProfileGenerationState.collect { profileGeneration ->
+        if (profileGeneration != observedProfileGeneration) {
+          observedProfileGeneration = profileGeneration
+          invalidateAwgPeerProfileCache()
+          if (appViewModel.awgProfileSyncReady.value &&
+              appViewModel.awgProfileMutationInProgress.value == null) {
+            resumeAwgDiscoveryFromCurrentNetmap()
           }
-          val newFingerprint =
-              (netmap.Peers ?: emptyList())
-                  .filter { it.Online == true }
-                  .map { it.Key }
-                  .sorted()
-                  .joinToString(",")
-          if (newFingerprint != awgPeerFingerprint) {
-            awgPeerFingerprint = newFingerprint
-            loadAwgPeersStatus()
-          }
-          loadLocalAwgStatus()
-          if (netmap.SelfNode.keyDoesNotExpire) {
-            showExpiry.set(false)
-            return@let
-          } else {
-            val expiryNotificationWindowMDM = MDMSettings.keyExpirationNotice.flow.value.value
-            val window =
-                expiryNotificationWindowMDM?.let { TimeUtil.duration(it) } ?: Duration.ofHours(24)
-            val expiresSoon =
-                TimeUtil.isWithinExpiryNotificationWindow(window, it.SelfNode.KeyExpiry ?: "")
-            showExpiry.set(expiresSoon)
-          }
+        }
+      }
+    }
+    viewModelScope.launch {
+      appViewModel.awgProfileSyncReady.collect { ready ->
+        if (ready && appViewModel.awgProfileMutationInProgress.value == null) {
+          resumeAwgDiscoveryFromCurrentNetmap()
+        }
+      }
+    }
+    viewModelScope.launch {
+      Notifier.netmap.collect { netmap ->
+        if (netmap == null) {
+          invalidateAwgPeerTopology()
+          return@collect
+        }
+        val newProfileIdentity =
+            listOf(netmap.Domain, netmap.SelfNode.StableID, netmap.SelfNode.User.toString())
+                .joinToString("\u0000")
+        val profileChanged = awgProfileIdentity != null && awgProfileIdentity != newProfileIdentity
+        if (profileChanged) {
+          invalidateAwgPeerTopology()
+        }
+        awgProfileIdentity = newProfileIdentity
+
+        searchJob?.cancel()
+        launch(Dispatchers.Default) {
+          peerCategorizer.regenerateGroupedPeers(netmap)
+          val filteredPeers = peerCategorizer.groupedAndFilteredPeers(searchTerm.value)
+          _peers.value = peerCategorizer.peerSets
+          _searchViewPeers.value = filteredPeers
+        }
+        if (appViewModel.awgProfileSyncReady.value &&
+            appViewModel.awgProfileMutationInProgress.value == null) {
+          refreshAwgPeerTopology(netmap)
+        } else {
+          awgTopologyAvailable = false
+        }
+        if (netmap.SelfNode.keyDoesNotExpire) {
+          showExpiry.set(false)
+          return@collect
+        } else {
+          val expiryNotificationWindowMDM = MDMSettings.keyExpirationNotice.flow.value.value
+          val window =
+              expiryNotificationWindowMDM?.let { TimeUtil.duration(it) } ?: Duration.ofHours(24)
+          val expiresSoon =
+              TimeUtil.isWithinExpiryNotificationWindow(window, netmap.SelfNode.KeyExpiry ?: "")
+          showExpiry.set(expiresSoon)
         }
       }
     }
@@ -308,41 +319,155 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
   }
 
   fun loadAwgPeersStatus(feedback: AwgRefreshFeedback = AwgRefreshFeedback.SILENT) {
-    if (awgPeersLoading) return
+    if (!awgTopologyAvailable ||
+        !appViewModel.awgProfileSyncReady.value ||
+        appViewModel.awgProfileMutationInProgress.value != null) {
+      return
+    }
+    if (feedback == AwgRefreshFeedback.USER_REQUESTED) {
+      awgRetryJob?.cancel()
+      awgRetryJob = null
+      awgSilentRetryAttempt = 0
+    }
+    if (awgPeersLoading) {
+      awgRefreshPending = true
+      awgPendingFeedback = strongerAwgFeedback(awgPendingFeedback, feedback)
+      return
+    }
+    awgRetryJob?.cancel()
+    awgRetryJob = null
     awgPeersLoading = true
+    val requestToken =
+        AwgRefreshRequestToken(
+            topologyGeneration = awgTopologyGeneration,
+            fingerprint = awgPeerFingerprint,
+            profileGeneration = appViewModel.awgProfileGeneration,
+        )
     Client(viewModelScope).awgSyncPeers { result ->
       awgPeersLoading = false
-      result
-          .onSuccess { peers ->
-            val statusMap = mutableMapOf<String, Boolean>()
-            val peerDataMap = mutableMapOf<String, AwgPeerResult>()
-            peers.forEach { peer ->
-              resultKeyCandidates(peer).forEach { key ->
-                statusMap[key] = peer.hasAwgConfig
-                peerDataMap.putIfAbsent(key, peer)
+      val responseIsCurrent =
+          isCurrentAwgRefresh(
+              requestToken,
+              awgTopologyGeneration,
+              awgPeerFingerprint,
+              awgTopologyAvailable,
+              appViewModel.awgProfileGeneration,
+          )
+      var shouldRetrySilently = false
+
+      if (responseIsCurrent) {
+        result
+            .onSuccess { peers ->
+              val merged = mergeAwgPeerResults(_awgPeersData.value, peers)
+              _awgPeersStatus.value = merged.status
+              _awgPeersData.value = merged.data
+              awgPeersProfileGeneration = requestToken.profileGeneration
+              shouldRetrySilently = peers.any(AwgPeerResult::lookupFailed)
+              awgRefreshMessage(peers, feedback)?.let { _awgStatusMessage.value = it }
+            }
+            .onFailure { error ->
+              // Preserve the last confirmed map. Treating a transport failure as an empty result
+              // makes previously confirmed AWG peers appear to switch to standard WireGuard.
+              shouldRetrySilently = true
+              TSLog.e("MainViewModel", "Failed to load AWG peers: ${error.message}")
+              if (feedback == AwgRefreshFeedback.USER_REQUESTED) {
+                _awgStatusMessage.value = "Could not refresh AWG peers: ${error.message}"
               }
             }
-            _awgPeersStatus.value = statusMap
-            _awgPeersData.value = peerDataMap
-            awgRefreshMessage(peers, feedback)?.let { _awgStatusMessage.value = it }
-          }
-          .onFailure { error ->
-            TSLog.e("MainViewModel", "Failed to load AWG peers: ${error.message}")
-            if (feedback == AwgRefreshFeedback.USER_REQUESTED) {
-              _awgStatusMessage.value = "Could not refresh AWG peers: ${error.message}"
-            }
-          }
+      }
+
+      val shouldRerun = awgRefreshPending && awgTopologyAvailable
+      if (shouldRerun) {
+        val rerunFeedback = strongerAwgFeedback(feedback, awgPendingFeedback)
+        awgRefreshPending = false
+        awgPendingFeedback = AwgRefreshFeedback.SILENT
+        loadAwgPeersStatus(rerunFeedback)
+      } else if (shouldRetrySilently) {
+        scheduleAwgPeersRetry()
+      } else {
+        awgSilentRetryAttempt = 0
+      }
     }
   }
 
+  private fun invalidateAwgPeerTopology() {
+    awgProfileIdentity = null
+    invalidateAwgPeerProfileCache()
+  }
+
+  private fun invalidateAwgPeerProfileCache() {
+    awgTopologyAvailable = false
+    awgTopologyGeneration++
+    awgPeerFingerprint = null
+    awgPeersProfileGeneration = null
+    awgRefreshPending = false
+    awgPendingFeedback = AwgRefreshFeedback.SILENT
+    awgRetryJob?.cancel()
+    awgRetryJob = null
+    awgSilentRetryAttempt = 0
+    _awgPeersStatus.value = emptyMap()
+    _awgPeersData.value = emptyMap()
+    _awgStatusMessage.value = null
+  }
+
+  private fun resumeAwgDiscoveryFromCurrentNetmap() {
+    val netmap = Notifier.netmap.value ?: return
+    if (!appViewModel.awgProfileSyncReady.value ||
+        appViewModel.awgProfileMutationInProgress.value != null) {
+      return
+    }
+    refreshAwgPeerTopology(netmap)
+  }
+
+  private fun refreshAwgPeerTopology(netmap: Netmap.NetworkMap) {
+    awgTopologyAvailable = true
+    val newFingerprint = awgPeerFingerprint(netmap)
+    if (newFingerprint != awgPeerFingerprint ||
+        awgPeersProfileGeneration != appViewModel.awgProfileGeneration) {
+      awgPeerFingerprint = newFingerprint
+      awgRetryJob?.cancel()
+      awgRetryJob = null
+      awgSilentRetryAttempt = 0
+      loadAwgPeersStatus()
+    }
+    loadLocalAwgStatus()
+  }
+
+  private fun scheduleAwgPeersRetry() {
+    if (awgSilentRetryAttempt >= AWG_REFRESH_RETRY_DELAYS_MILLIS.size) return
+    val expectedFingerprint = awgPeerFingerprint
+    val retryDelay = AWG_REFRESH_RETRY_DELAYS_MILLIS[awgSilentRetryAttempt++]
+    awgRetryJob =
+        viewModelScope.launch {
+          delay(retryDelay)
+          if (expectedFingerprint == awgPeerFingerprint && appViewModel.awgProfileSyncReady.value) {
+            awgRetryJob = null
+            loadAwgPeersStatus(AwgRefreshFeedback.SILENT)
+          }
+        }
+  }
+
   fun loadLocalAwgStatus() {
+    if (!appViewModel.awgProfileSyncReady.value ||
+        appViewModel.awgProfileMutationInProgress.value != null) {
+      return
+    }
     val client = Client(viewModelScope)
+    val topologyGeneration = awgTopologyGeneration
+    val prefsReadToken = appViewModel.beginAwgPrefsRead(AwgPrefsReader.MAIN)
     TSLog.d("MainViewModel", "Loading local AWG configuration status")
     client.getLocalPrefs { result ->
+      if (!awgTopologyAvailable ||
+          topologyGeneration != awgTopologyGeneration ||
+          !appViewModel.isCurrentAwgPrefsRead(prefsReadToken)) {
+        return@getLocalPrefs
+      }
       result
           .onSuccess { prefs ->
             val hasLocalAwg = prefs.AmneziaWG?.hasNonDefaultValues() == true
-            appViewModel.setLocalAwgConfigured(hasLocalAwg)
+            if (!appViewModel.commitLocalAwgStatus(prefsReadToken, hasLocalAwg)) {
+              return@getLocalPrefs
+            }
             TSLog.d("MainViewModel", "Local AWG status loaded: hasAwgConfig=$hasLocalAwg")
           }
           .onFailure { error ->
@@ -359,7 +484,21 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
 
   fun syncAwgConfigFromPeer(peer: Tailcfg.Node, timeout: Int = 10) {
     val hostname = peer.displayName
-    val peerData = getAwgConfigForPeer(peer)
+    val currentPeer = currentNetmapPeer(peer, Notifier.netmap.value)
+    if (currentPeer == null) {
+      _awgStatusMessage.value = "AWG peer $hostname is no longer in the current network map"
+      return
+    }
+    if (!canUseAwgPeerCache(
+        cacheProfileGeneration = awgPeersProfileGeneration,
+        currentProfileGeneration = appViewModel.awgProfileGeneration,
+        profileReady = appViewModel.awgProfileSyncReady.value,
+        selectedPeerIsCurrent = true,
+    )) {
+      _awgStatusMessage.value = "AWG status for $hostname is stale; refresh and retry"
+      return
+    }
+    val peerData = getAwgConfigForPeer(currentPeer)
     if (peerData == null) {
       _awgStatusMessage.value = "AWG status for $hostname is not loaded; refresh and retry"
       return
@@ -372,17 +511,28 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
       _awgStatusMessage.value = "$hostname uses standard WireGuard"
       return
     }
-    val fullNodeKey = peerData.nodeKey.takeIf { it.startsWith("nodekey:") } ?: peer.Key
-    if (!fullNodeKey.startsWith("nodekey:")) {
-      _awgStatusMessage.value = "No full node key is available for $hostname"
+    val fullNodeKey = awgSyncNodeKey(currentPeer, peerData)
+    if (fullNodeKey == null) {
+      _awgStatusMessage.value = "AWG identity for $hostname changed; refresh and retry"
       return
     }
-    _awgSyncInProgress.value = peer.StableID
-    Client(viewModelScope).awgSyncApply(fullNodeKey, timeout) { result ->
-      _awgSyncInProgress.value = null
+    val writeOperation = appViewModel.tryBeginAwgWrite(currentPeer.StableID)
+    if (writeOperation == null) {
+      _awgStatusMessage.value = "An account or AWG configuration update is already in progress"
+      return
+    }
+    Client(appViewModel.viewModelScope).awgSyncApply(fullNodeKey, timeout) { result ->
+      val appliedConfig = result.getOrNull()
+      if (!appViewModel.finishAwgWrite(
+          operation = writeOperation,
+          writeSucceeded = result.isSuccess,
+          localAwgConfiguredOnSuccess = appliedConfig?.hasNonDefaultValues() == true,
+      )) {
+        return@awgSyncApply
+      }
+      if (!viewModelScope.isActive) return@awgSyncApply
       result
           .onSuccess { config ->
-            appViewModel.setLocalAwgConfigured(config.hasNonDefaultValues())
             _awgStatusMessage.value = "${config.versionLabel()} synced from $hostname"
             // EditPrefs performs a live wgengine reconfiguration; restarting VpnService here can
             // interrupt the control connection during a mobile upgrade.
@@ -395,10 +545,15 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
   }
 
   fun getAwgConfigForPeer(peer: Tailcfg.Node): AwgPeerResult? =
-      peerKeyCandidates(peer).firstNotNullOfOrNull { _awgPeersData.value[it] }
+      findIndexedAwgPeerResult(peer, _awgPeersData.value)
 
-  fun hasAwgConfigForPeer(peer: Tailcfg.Node, status: Map<String, Boolean>): Boolean =
-      peerKeyCandidates(peer).any { status[it] == true }
+  fun hasAwgConfigForPeer(peer: Tailcfg.Node, data: Map<String, AwgPeerResult>): Boolean =
+      canUseAwgPeerCache(
+          cacheProfileGeneration = awgPeersProfileGeneration,
+          currentProfileGeneration = appViewModel.awgProfileGeneration,
+          profileReady = appViewModel.awgProfileSyncReady.value,
+          selectedPeerIsCurrent = currentNetmapPeer(peer, Notifier.netmap.value) != null,
+      ) && indexedAwgStatus(peer, data)
 
   fun setVpnPermissionLauncher(launcher: ActivityResultLauncher<Intent>) {
     // No intent means we're already authorized
@@ -452,6 +607,200 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     }
   }
 }
+
+internal data class AwgPeerDiscoveryIndex(
+    val status: Map<String, Boolean>,
+    val data: Map<String, AwgPeerResult>,
+)
+
+internal data class AwgRefreshRequestToken(
+    val topologyGeneration: Long,
+    val fingerprint: String?,
+    val profileGeneration: Long,
+)
+
+internal fun isCurrentAwgRefresh(
+    request: AwgRefreshRequestToken,
+    topologyGeneration: Long,
+    fingerprint: String?,
+    topologyAvailable: Boolean,
+    profileGeneration: Long,
+): Boolean =
+    topologyAvailable &&
+        request.topologyGeneration == topologyGeneration &&
+        request.fingerprint == fingerprint &&
+        request.profileGeneration == profileGeneration
+
+internal fun awgPeerFingerprint(netmap: Netmap.NetworkMap): String {
+  val peers =
+      (netmap.Peers ?: emptyList())
+          .filter { it.Online == true }
+          .map {
+            listOf(it.Key, it.primaryIPv4Address, it.Name, it.ComputedName).joinToString(
+                "\u0000") { value ->
+                  value.orEmpty()
+                }
+          }
+          .sorted()
+          .joinToString("\u0001")
+  return "${netmap.SelfNode.Key}\u0002$peers"
+}
+
+internal fun canUseAwgPeerCache(
+    cacheProfileGeneration: Long?,
+    currentProfileGeneration: Long,
+    profileReady: Boolean,
+    selectedPeerIsCurrent: Boolean,
+): Boolean =
+    profileReady &&
+        selectedPeerIsCurrent &&
+        cacheProfileGeneration != null &&
+        cacheProfileGeneration == currentProfileGeneration
+
+internal fun currentNetmapPeer(
+    selected: Tailcfg.Node,
+    netmap: Netmap.NetworkMap?,
+): Tailcfg.Node? {
+  val peers = netmap?.Peers ?: return null
+  if (selected.StableID.isNotBlank()) {
+    val current = peers.firstOrNull { it.StableID == selected.StableID } ?: return null
+    if (selected.Key.isNotBlank() && current.Key != selected.Key) return null
+    return current
+  }
+  if (selected.Key.isNotBlank()) return peers.firstOrNull { it.Key == selected.Key }
+  return peers.firstOrNull { candidate ->
+    selected.primaryIPv4Address != null &&
+        candidate.primaryIPv4Address == selected.primaryIPv4Address
+  }
+}
+
+private fun peerKeyCandidates(value: String): List<String> {
+  val trimmed = value.trim().trimEnd('.')
+  val short = trimmed.substringBefore('.')
+  return listOf(trimmed, trimmed.lowercase(), short, short.lowercase())
+      .filter(String::isNotEmpty)
+      .distinct()
+}
+
+internal fun peerKeyCandidates(peer: Tailcfg.Node): List<String> =
+    buildList {
+          add(peer.Key)
+          peer.primaryIPv4Address?.let(::add)
+          addAll(peerKeyCandidates(peer.Hostinfo.Hostname ?: peer.ComputedName ?: peer.Name))
+          addAll(peerKeyCandidates(peer.Name))
+        }
+        .filter(String::isNotEmpty)
+        .distinct()
+
+private fun legacyPeerKeyCandidates(peer: Tailcfg.Node): List<String> =
+    buildList {
+          peer.primaryIPv4Address?.let(::add)
+          addAll(peerKeyCandidates(peer.Hostinfo.Hostname ?: peer.ComputedName ?: peer.Name))
+          addAll(peerKeyCandidates(peer.Name))
+        }
+        .filter(String::isNotEmpty)
+        .distinct()
+
+internal fun resultKeyCandidates(peer: AwgPeerResult): List<String> =
+    buildList {
+          add(peer.nodeKey)
+          peer.tailscaleIP?.let(::add)
+          addAll(peerKeyCandidates(peer.hostname))
+        }
+        .filter(String::isNotEmpty)
+        .distinct()
+
+/**
+ * Indexes a fresh discovery result while retaining a previously confirmed AWG configuration when
+ * the same peer has a transient lookup error. Peers omitted by the fresh response are deliberately
+ * removed, so offline nodes do not remain visible forever.
+ */
+internal fun mergeAwgPeerResults(
+    previousData: Map<String, AwgPeerResult>,
+    peers: List<AwgPeerResult>,
+): AwgPeerDiscoveryIndex {
+  val status = linkedMapOf<String, Boolean>()
+  val data = linkedMapOf<String, AwgPeerResult>()
+  peers.forEach { peer ->
+    val previous =
+        if (peer.lookupFailed) {
+          previousAwgResult(previousData, peer)
+        } else {
+          null
+        }
+    val effective = previous?.takeIf(AwgPeerResult::hasAwgConfig) ?: peer
+    resultKeyCandidates(peer).forEach { key ->
+      status.putIfAbsent(key, effective.hasAwgConfig)
+      data.putIfAbsent(key, effective)
+    }
+  }
+  return AwgPeerDiscoveryIndex(status = status, data = data)
+}
+
+private fun previousAwgResult(
+    previousData: Map<String, AwgPeerResult>,
+    peer: AwgPeerResult,
+): AwgPeerResult? {
+  // A modern response with a node key must only inherit data for that exact identity. Reusing an
+  // old Tailscale IP after re-enrollment must not transfer an AWG badge or stale sync target.
+  if (peer.nodeKey.isNotBlank()) return previousData[peer.nodeKey]
+
+  // Identity-less legacy LocalAPI responses can only be correlated by IP or hostname.
+  peer.tailscaleIP?.takeIf(String::isNotBlank)?.let {
+    previousData[it]?.let { old ->
+      return old
+    }
+  }
+
+  // A hostname is not an identity: a newly enrolled node may reuse an old device name. Only legacy
+  // responses that also omit the IP need this final compatibility path.
+  if (!peer.tailscaleIP.isNullOrBlank()) return null
+  return peerKeyCandidates(peer.hostname).firstNotNullOfOrNull(previousData::get)
+}
+
+/**
+ * Resolves a modern selected peer only by its exact node key. IP/hostname fallback is retained only
+ * when either side lacks a node identity, for compatibility with historical LocalAPI responses.
+ */
+internal fun findIndexedAwgPeerResult(
+    peer: Tailcfg.Node,
+    data: Map<String, AwgPeerResult>,
+): AwgPeerResult? {
+  if (peer.Key.isNotBlank()) {
+    data[peer.Key]
+        ?.takeIf { it.nodeKey == peer.Key }
+        ?.let {
+          return it
+        }
+    return legacyPeerKeyCandidates(peer).firstNotNullOfOrNull { candidate ->
+      data[candidate]?.takeIf { it.nodeKey.isBlank() }
+    }
+  }
+  return legacyPeerKeyCandidates(peer).firstNotNullOfOrNull(data::get)
+}
+
+internal fun indexedAwgStatus(peer: Tailcfg.Node, data: Map<String, AwgPeerResult>): Boolean =
+    findIndexedAwgPeerResult(peer, data)?.hasAwgConfig == true
+
+/** Revalidates the selected identity immediately before calling the mutating sync endpoint. */
+internal fun awgSyncNodeKey(peer: Tailcfg.Node, result: AwgPeerResult): String? {
+  val selectedNodeKey = peer.Key.takeIf { it.startsWith("nodekey:") }
+  if (selectedNodeKey != null) {
+    if (result.nodeKey.isNotBlank() && result.nodeKey != selectedNodeKey) return null
+    return selectedNodeKey
+  }
+  return result.nodeKey.takeIf { it.startsWith("nodekey:") }
+}
+
+private fun strongerAwgFeedback(
+    first: AwgRefreshFeedback,
+    second: AwgRefreshFeedback,
+): AwgRefreshFeedback =
+    if (first == AwgRefreshFeedback.USER_REQUESTED || second == AwgRefreshFeedback.USER_REQUESTED) {
+      AwgRefreshFeedback.USER_REQUESTED
+    } else {
+      AwgRefreshFeedback.SILENT
+    }
 
 private fun userStringRes(currentState: State?, previousState: State?, vpnActive: Boolean): Int {
   return when {
