@@ -89,13 +89,11 @@ fun SettingsView(
   if (showAwgDialog) {
     AlertDialog(
         onDismissRequest = { if (!isRefreshingAwg) showAwgDialog = false },
-        title = { Text("AWG Settings") },
+        title = { Text("AmneziaWG") },
         text = {
           Column {
             TextButton(
-                onClick = {
-                  viewModel.refreshAwgPeers { showAwgDialog = false }
-                },
+                onClick = { viewModel.refreshAwgPeers { showAwgDialog = false } },
                 enabled = !isRefreshingAwg,
             ) {
               if (isRefreshingAwg) {
@@ -105,26 +103,29 @@ fun SettingsView(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
               }
-              Text("Refresh AWG Peers")
+              Text("Refresh peer profiles")
             }
-            TextButton(onClick = {
-              showAwgDialog = false
-              settingsNav.onNavigateToAwgManual()
-            }) {
-              Text("Set Manual AWG Config")
-            }
-            TextButton(onClick = {
-              showAwgDialog = false
-              settingsNav.onNavigateToAwgJson()
-            }) {
-              Text("Set JSON AWG Config")
-            }
-            TextButton(onClick = {
-              showAwgDialog = false
-              settingsNav.onNavigateToAwgViewer()
-            }) {
-              Text("View Local AWG Config")
-            }
+            TextButton(
+                onClick = {
+                  showAwgDialog = false
+                  settingsNav.onNavigateToAwgManual()
+                }) {
+                  Text("Generate or edit profile")
+                }
+            TextButton(
+                onClick = {
+                  showAwgDialog = false
+                  settingsNav.onNavigateToAwgJson()
+                }) {
+                  Text("Import profile JSON")
+                }
+            TextButton(
+                onClick = {
+                  showAwgDialog = false
+                  settingsNav.onNavigateToAwgViewer()
+                }) {
+                  Text("View or copy local profile")
+                }
           }
         },
         confirmButton = {},
@@ -155,8 +156,8 @@ fun SettingsView(
 
           Lists.SectionDivider()
           Setting.Text(
-              title = "AWG Settings",
-              subtitle = "Configure AmneziaWG parameters",
+              title = "AmneziaWG",
+              subtitle = "Generate, import, and sync AWG v2 or v3 profiles",
               onClick = { showAwgDialog = true })
 
           Lists.ItemDivider()

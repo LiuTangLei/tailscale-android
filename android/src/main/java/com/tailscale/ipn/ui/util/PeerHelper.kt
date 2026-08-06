@@ -32,7 +32,20 @@ class PeerCategorizer {
 
     val me = netmap.currentUserProfile()
 
-    for (peer in (peers + selfNode)) {
+    // Headscale and older control servers can include the local node in Peers as well as
+    // SelfNode. Compose requires every LazyColumn key to be unique, and showing that duplicate
+    // would otherwise crash the app during an in-place upgrade. Put SelfNode first so its
+    // authoritative local fields win, then also discard any duplicate peer entries defensively.
+    val uniquePeers =
+        (listOf(selfNode) + peers).distinctBy { peer ->
+          when {
+            peer.StableID.isNotEmpty() -> "stable:${peer.StableID}"
+            peer.Key.isNotEmpty() -> "key:${peer.Key}"
+            else -> "fallback:${peer.User}:${peer.Name}:${peer.Addresses.orEmpty().joinToString()}"
+          }
+        }
+
+    for (peer in uniquePeers) {
 
       val userId = peer.User
       val profile = netmap.userProfile(userId)

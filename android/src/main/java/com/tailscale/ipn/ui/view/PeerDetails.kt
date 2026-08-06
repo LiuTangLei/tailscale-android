@@ -110,34 +110,32 @@ fun PeerDetails(
           itemsWithDividers(node.info, key = { "info_${it.titleRes}" }) {
             ValueRow(title = stringResource(id = it.titleRes), value = it.value.getString())
           }
-                    // AWG Configuration section
-                    awgConfig?.let { config ->
-                        if (config.hasAwgConfig) {
-                            item(key = "awgDivider") { Lists.SectionDivider() }
-
-                            item(key = "awgHeader") {
-                                Lists.MutedHeader("AWG Config")
-                            }
-
-                            config.config?.let { awgPrefs ->
-                                item(key = "awgConfigString") {
-                                    ValueRow(
-                                        title = "Config Detail",
-                                        value = formatAwgConfig(awgPrefs),
-                                    )
-                                }
-                            }
-
-                            if (config.error != null) {
-                                item(key = "awgError") {
-                                    ValueRow(
-                                        title = "Config Error",
-                                        value = config.error,
-                                    )
-                                }
-                            }
-                        }
-                    }
+          awgConfig?.let { result ->
+            item(key = "awgDivider") { Lists.SectionDivider() }
+            item(key = "awgHeader") { Lists.MutedHeader("AWG") }
+            when {
+              result.lookupFailed -> {
+                item(key = "awgError") {
+                  ValueRow(title = "Status", value = "Could not check: ${result.error}")
+                }
+              }
+              result.hasAwgConfig -> {
+                result.config?.let { config ->
+                  item(key = "awgProfile") {
+                    ValueRow(title = "Profile", value = config.versionLabel())
+                  }
+                  item(key = "awgConfigString") {
+                    ValueRow(title = "Config detail", value = formatAwgConfig(config))
+                  }
+                }
+              }
+              else -> {
+                item(key = "awgStandard") {
+                  ValueRow(title = "Profile", value = "Standard WireGuard")
+                }
+              }
+            }
+          }
         }
         if (isPinging) {
           ModalBottomSheet(onDismissRequest = { model.onPingDismissal() }) {
@@ -183,60 +181,42 @@ fun ValueRow(title: String, value: String) {
 }
 
 private fun formatAwgConfig(config: com.tailscale.ipn.ui.model.AmneziaWGPrefs): String {
-    val parts = mutableListOf<String>()
-
-    config.JC?.let { parts.add("JC=$it") }
-    config.JMin?.let { parts.add("JMin=$it") }
-    config.JMax?.let { parts.add("JMax=$it") }
-    config.S1?.let { parts.add("S1=$it") }
-    config.S2?.let { parts.add("S2=$it") }
-    config.S3?.let { parts.add("S3=$it") }
-    config.S4?.let { parts.add("S4=$it") }
-    config.I1?.let { if (it.isNotEmpty()) parts.add("I1=$it") }
-    config.I2?.let { if (it.isNotEmpty()) parts.add("I2=$it") }
-    config.I3?.let { if (it.isNotEmpty()) parts.add("I3=$it") }
-    config.I4?.let { if (it.isNotEmpty()) parts.add("I4=$it") }
-    config.I5?.let { if (it.isNotEmpty()) parts.add("I5=$it") }
-    config.H1?.let { range ->
-        if (range.hasValue()) {
-            if (range.isFixedValue()) {
-                parts.add("H1=${range.getFixedValue()}")
-            } else {
-                parts.add("H1=${range.min}-${range.max}")
-            }
-        }
-    }
-    config.H2?.let { range ->
-        if (range.hasValue()) {
-            if (range.isFixedValue()) {
-                parts.add("H2=${range.getFixedValue()}")
-            } else {
-                parts.add("H2=${range.min}-${range.max}")
-            }
-        }
-    }
-    config.H3?.let { range ->
-        if (range.hasValue()) {
-            if (range.isFixedValue()) {
-                parts.add("H3=${range.getFixedValue()}")
-            } else {
-                parts.add("H3=${range.min}-${range.max}")
-            }
-        }
-    }
-    config.H4?.let { range ->
-        if (range.hasValue()) {
-            if (range.isFixedValue()) {
-                parts.add("H4=${range.getFixedValue()}")
-            } else {
-                parts.add("H4=${range.min}-${range.max}")
-            }
-        }
-    }
-
-    return if (parts.isEmpty()) {
-        "Base Config"
-    } else {
-        parts.joinToString("\n")
-    }
+  val parts = mutableListOf<String>()
+  listOf(
+          "JC" to config.JC,
+          "JMin" to config.JMin,
+          "JMax" to config.JMax,
+          "S1" to config.S1,
+          "S2" to config.S2,
+          "S3" to config.S3,
+          "S4" to config.S4,
+      )
+      .forEach { (name, value) -> value?.let { parts.add("$name=$it") } }
+  listOf(
+          "I1" to config.I1,
+          "I2" to config.I2,
+          "I3" to config.I3,
+          "I4" to config.I4,
+          "I5" to config.I5,
+      )
+      .forEach { (name, value) ->
+        value?.takeIf(String::isNotEmpty)?.let { parts.add("$name=$it") }
+      }
+  listOf(
+          "H1" to config.H1,
+          "H2" to config.H2,
+          "H3" to config.H3,
+          "H4" to config.H4,
+          "ContentPaddingAddition" to config.ContentPaddingAddition,
+          "RekeyAfterTime" to config.RekeyAfterTime,
+          "RekeyTimeout" to config.RekeyTimeout,
+          "RejectAfterTime" to config.RejectAfterTime,
+          "KeepaliveTimeout" to config.KeepaliveTimeout,
+          "MaxHandshakeAttempts" to config.MaxHandshakeAttempts,
+      )
+      .forEach { (name, range) ->
+        range?.takeIf { it.hasValue() }?.let { parts.add("$name=${it.displayValue()}") }
+      }
+  if (config.isV3()) parts.add("HeaderProtectionKey=set")
+  return parts.joinToString("\n").ifEmpty { "No obfuscation parameters" }
 }

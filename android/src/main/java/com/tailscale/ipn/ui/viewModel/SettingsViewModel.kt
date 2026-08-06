@@ -73,19 +73,24 @@ class SettingsViewModel : IpnViewModel() {
     _isRefreshingAwgPeers.value = true
     val client = Client(viewModelScope)
     client.awgSyncPeers { result ->
-      result.onSuccess { awgPeers: List<AwgPeerResult> ->
-        val awgCount = awgPeers.count { it.hasAwgConfig }
-        val total = awgPeers.size
-        _awgRefreshMessage.value = if (total > 0) {
-          if (awgCount > 0) "Found $awgCount/$total peers with AWG config"
-          else "Checked $total peers, no AWG config found"
-        } else {
-          "No peers found"
-        }
-      }.onFailure { error ->
-        TSLog.e("SettingsViewModel", "Failed to refresh AWG peers: ${error.message}")
-        _awgRefreshMessage.value = "Failed to refresh AWG peers: ${error.message}"
-      }
+      result
+          .onSuccess { awgPeers: List<AwgPeerResult> ->
+            val awgCount = awgPeers.count { it.hasAwgConfig }
+            val failedCount = awgPeers.count { it.lookupFailed }
+            val total = awgPeers.size
+            _awgRefreshMessage.value =
+                when {
+                  total == 0 -> "No online peers found"
+                  failedCount > 0 ->
+                      "Found $awgCount/$total AWG peers; $failedCount could not be checked"
+                  awgCount > 0 -> "Found $awgCount/$total peers with AWG config"
+                  else -> "Checked $total peers; all use standard WireGuard"
+                }
+          }
+          .onFailure { error ->
+            TSLog.e("SettingsViewModel", "Failed to refresh AWG peers: ${error.message}")
+            _awgRefreshMessage.value = "Failed to refresh AWG peers: ${error.message}"
+          }
       _isRefreshingAwgPeers.value = false
       onComplete()
     }

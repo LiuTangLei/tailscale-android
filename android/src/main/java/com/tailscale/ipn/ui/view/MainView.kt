@@ -89,7 +89,6 @@ import com.tailscale.ipn.ui.Links
 import com.tailscale.ipn.ui.model.Ipn
 import com.tailscale.ipn.ui.model.IpnLocal
 import com.tailscale.ipn.ui.model.Netmap
-import com.tailscale.ipn.ui.model.PeerAwgStatus
 import com.tailscale.ipn.ui.model.Permissions
 import com.tailscale.ipn.ui.model.Tailcfg
 import com.tailscale.ipn.ui.theme.customErrorContainer
@@ -137,6 +136,10 @@ fun MainView(
 ) {
   val currentPingDevice by viewModel.pingViewModel.peer.collectAsState()
   val healthIcon by viewModel.healthIcon.collectAsState()
+
+  // MainView can be recreated without a new netmap (for example, after applying or syncing an
+  // AWG profile in Settings). Refresh the peer profile cache so badges never remain stale.
+  LaunchedEffect(Unit) { if (viewModel.netmap.value != null) viewModel.loadAwgPeersStatus() }
 
   LoadingIndicator.Wrap {
     Scaffold(contentWindowInsets = WindowInsets.Companion.statusBars) { paddingInsets ->
@@ -261,10 +264,10 @@ fun MainView(
     val awgStatusMessage by viewModel.awgStatusMessage.collectAsState()
     val context = LocalContext.current
     LaunchedEffect(awgStatusMessage) {
-        awgStatusMessage?.let { message ->
-            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-            viewModel.clearAwgStatusMessage()
-        }
+      awgStatusMessage?.let { message ->
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        viewModel.clearAwgStatusMessage()
+      }
     }
   }
 }
@@ -575,6 +578,9 @@ fun PeerList(
   var isListFocussed by remember { mutableStateOf(false) }
   val expandedPeer = viewModel.expandedMenuPeer.collectAsState()
   val localClipboardManager = LocalClipboardManager.current
+  val awgStatus by viewModel.awgPeersStatus.collectAsState()
+  val awgSyncInProgress by viewModel.awgSyncInProgress.collectAsState()
+  val localAwgStatus by viewModel.localAwgStatus.collectAsState()
   // Restrict search to devices running API 33+ (see https://github.com/tailscale/corp/issues/27375)
   val enableSearch = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
   Column(modifier = Modifier.fillMaxSize()) {
@@ -677,54 +683,46 @@ fun PeerList(
                       Spacer(modifier = Modifier.size(8.dp))
                       Text(text = peer.displayName, style = MaterialTheme.typography.titleMedium)
                       // AWG status indicator
-                      val awgStatus by viewModel.awgPeersStatus.collectAsState()
-                      val awgSyncInProgress by viewModel.awgSyncInProgress.collectAsState()
-                      val localAwgStatus by viewModel.localAwgStatus.collectAsState()
-                      val peerHostname = peer.Hostinfo.Hostname ?: peer.ComputedName ?: peer.Name
-                      val peerAwgKey = peerHostname.trim().substringBefore('.').lowercase()
-
                       // Check if this is self node
                       val isSelfNode = netmap.value?.let { peer.isSelfNode(it) } ?: false
                       val hasAwgConfig =
                           if (isSelfNode) {
-                              localAwgStatus // Use local AWG status for self node
+                            localAwgStatus // Use local AWG status for self node
                           } else {
-                            awgStatus[peerAwgKey] == true // Use peer AWG status for other nodes
+                            viewModel.hasAwgConfigForPeer(peer, awgStatus)
                           }
 
                       if (hasAwgConfig) {
-                          Spacer(modifier = Modifier.size(2.dp))
-                          Text(
-                              text = "\u2605",
-                              style = MaterialTheme.typography.titleMedium,
-                              color = Color(0xFFFFD700), // Gold color
-                          )
+                        Spacer(modifier = Modifier.size(2.dp))
+                        Text(
+                            text = "\u2605",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color(0xFFFFD700), // Gold color
+                        )
 
-                          // Only show sync button for peer nodes (not self node)
-                          if (!isSelfNode) {
-                              // AWG sync button
-                              Spacer(modifier = Modifier.size(2.dp))
-                              Button(
-                                  onClick = {
-                                      viewModel.syncAwgConfigFromPeer(peerHostname)
-                                  },
-                                  enabled = awgSyncInProgress != peerHostname,
-                                  modifier = Modifier.height(28.dp),
-                                  contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                              ) {
-                                  if (awgSyncInProgress == peerHostname) {
-                                      CircularProgressIndicator(
-                                          modifier = Modifier.size(16.dp),
-                                          strokeWidth = 2.dp,
-                                      )
-                                  } else {
-                                      Text(
-                                          text = "Sync",
-                                          style = MaterialTheme.typography.bodySmall,
-                                      )
-                                  }
-                              }
+                        // Only show sync button for peer nodes (not self node)
+                        if (!isSelfNode) {
+                          // AWG sync button
+                          Spacer(modifier = Modifier.size(2.dp))
+                          Button(
+                              onClick = { viewModel.syncAwgConfigFromPeer(peer) },
+                              enabled = awgSyncInProgress != peer.StableID,
+                              modifier = Modifier.height(28.dp),
+                              contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                          ) {
+                            if (awgSyncInProgress == peer.StableID) {
+                              CircularProgressIndicator(
+                                  modifier = Modifier.size(16.dp),
+                                  strokeWidth = 2.dp,
+                              )
+                            } else {
+                              Text(
+                                  text = "Sync",
+                                  style = MaterialTheme.typography.bodySmall,
+                              )
+                            }
                           }
+                        }
                       }
                       DropdownMenu(
                           expanded = expandedPeer.value?.StableID == peer.StableID,

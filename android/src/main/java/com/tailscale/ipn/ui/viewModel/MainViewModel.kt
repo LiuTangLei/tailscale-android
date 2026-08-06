@@ -94,43 +94,59 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
   // Icon displayed in the button to present the health view
   val healthIcon: StateFlow<Int?> = MutableStateFlow(null)
 
-    // AWG peers status - normalized peer key to hasAwgConfig mapping
-    private val _awgPeersStatus = MutableStateFlow<Map<String, Boolean>>(emptyMap())
-    val awgPeersStatus: StateFlow<Map<String, Boolean>> = _awgPeersStatus
+  // AWG results are indexed by full node key, Tailscale IP, and hostname aliases. Using the full
+  // key first avoids collisions between duplicate/renamed hosts and keeps sync compatible with the
+  // LocalAPI contract.
+  private val _awgPeersStatus = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+  val awgPeersStatus: StateFlow<Map<String, Boolean>> = _awgPeersStatus
 
-    // AWG status message for toast
-    private val _awgStatusMessage = MutableStateFlow<String?>(null)
-    val awgStatusMessage: StateFlow<String?> = _awgStatusMessage
+  // AWG status message for toast
+  private val _awgStatusMessage = MutableStateFlow<String?>(null)
+  val awgStatusMessage: StateFlow<String?> = _awgStatusMessage
 
-    // AWG peers data - normalized peer key to full peer data mapping
-    private val _awgPeersData = MutableStateFlow<Map<String, AwgPeerResult>>(emptyMap())
-    val awgPeersData: StateFlow<Map<String, AwgPeerResult>> = _awgPeersData
+  // AWG peers data - normalized peer key to full peer data mapping
+  private val _awgPeersData = MutableStateFlow<Map<String, AwgPeerResult>>(emptyMap())
+  val awgPeersData: StateFlow<Map<String, AwgPeerResult>> = _awgPeersData
 
-    // AWG sync operation status
-    private val _awgSyncInProgress = MutableStateFlow<String?>(null) // hostname of peer being synced
-    val awgSyncInProgress: StateFlow<String?> = _awgSyncInProgress
+  // AWG sync operation status
+  private val _awgSyncInProgress = MutableStateFlow<String?>(null) // hostname of peer being synced
+  val awgSyncInProgress: StateFlow<String?> = _awgSyncInProgress
 
-    // Flag to prevent multiple AWG peers requests
-    private var awgPeersLoaded = false
+  private var awgPeersLoading = false
+  private var awgPeerFingerprint = ""
 
-    // Local machine AWG configuration status
-    val localAwgStatus: StateFlow<Boolean> = appViewModel.localAwgConfigured
+  // Local machine AWG configuration status
+  val localAwgStatus: StateFlow<Boolean> = appViewModel.localAwgConfigured
 
-    private fun normalizePeerKey(value: String): String {
-      return value.trim().trimEnd('.').substringBefore('.').lowercase()
-    }
+  private fun normalizePeerKey(value: String): String =
+      value.trim().trimEnd('.').substringBefore('.').lowercase()
 
-    private fun peerKeyCandidates(value: String): List<String> {
-      val trimmed = value.trim().trimEnd('.')
-      val short = trimmed.substringBefore('.')
-      return listOf(
-          trimmed,
-          trimmed.lowercase(),
-          short,
-          short.lowercase(),
-          normalizePeerKey(trimmed),
-      ).distinct()
-    }
+  private fun peerKeyCandidates(value: String): List<String> {
+    val trimmed = value.trim().trimEnd('.')
+    val short = trimmed.substringBefore('.')
+    return listOf(trimmed, trimmed.lowercase(), short, short.lowercase(), normalizePeerKey(trimmed))
+        .filter(String::isNotEmpty)
+        .distinct()
+  }
+
+  private fun peerKeyCandidates(peer: Tailcfg.Node): List<String> =
+      buildList {
+            add(peer.Key)
+            peer.primaryIPv4Address?.let(::add)
+            addAll(peerKeyCandidates(peer.Hostinfo.Hostname ?: peer.ComputedName ?: peer.Name))
+            addAll(peerKeyCandidates(peer.Name))
+          }
+          .filter(String::isNotEmpty)
+          .distinct()
+
+  private fun resultKeyCandidates(peer: AwgPeerResult): List<String> =
+      buildList {
+            add(peer.nodeKey)
+            peer.tailscaleIP?.let(::add)
+            addAll(peerKeyCandidates(peer.hostname))
+          }
+          .filter(String::isNotEmpty)
+          .distinct()
 
   fun updateSearchTerm(term: String) {
     _searchTerm.value = term
@@ -203,12 +219,17 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
             _peers.value = peerCategorizer.peerSets
             _searchViewPeers.value = filteredPeers
           }
-          // Load AWG peers status when network map changes, but only once
-          if (!awgPeersLoaded) {
-              awgPeersLoaded = true
-              loadAwgPeersStatus()
-              loadLocalAwgStatus()
+          val newFingerprint =
+              (netmap.Peers ?: emptyList())
+                  .filter { it.Online == true }
+                  .map { it.Key }
+                  .sorted()
+                  .joinToString(",")
+          if (newFingerprint != awgPeerFingerprint) {
+            awgPeerFingerprint = newFingerprint
+            loadAwgPeersStatus()
           }
+          loadLocalAwgStatus()
           if (netmap.SelfNode.keyDoesNotExpire) {
             showExpiry.set(false)
             return@let
@@ -284,174 +305,157 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     autoFocusSearch = false
   }
 
-    fun loadAwgPeersStatus() {
-        val client = Client(viewModelScope)
-        TSLog.d("MainViewModel", "Attempting to call awg-sync-peers API")
-        client.awgSyncPeers { result ->
-            result
-                .onSuccess { awgPeers: List<AwgPeerResult> ->
-                    TSLog.d("MainViewModel", "AWG peers API success: ${awgPeers.size} peers returned")
-                    awgPeers.forEach { peer ->
-                        TSLog.d("MainViewModel", "AWG peer: hostname=${peer.hostname}, nodeKey=${peer.nodeKey}, hasConfig=${peer.hasAwgConfig}")
-                    }
-                    val statusMap = mutableMapOf<String, Boolean>()
-                    val peerDataMap = mutableMapOf<String, AwgPeerResult>()
-                    awgPeers.forEach { peer ->
-                      peerKeyCandidates(peer.hostname).forEach { key ->
-                        statusMap[key] = peer.hasAwgConfig
-                        peerDataMap.putIfAbsent(key, peer)
-                      }
-                    }
-                    _awgPeersStatus.value = statusMap
-                    _awgPeersData.value = peerDataMap
-                    val awgPeersCount = awgPeers.count { it.hasAwgConfig }
-                    val totalPeers = awgPeers.size
-                    val message =
-                        if (totalPeers > 0) {
-                            if (awgPeersCount > 0) {
-                                "Found $awgPeersCount/$totalPeers peers with AWG config"
-                            } else {
-                                "Checked $totalPeers peers, no AWG config found"
-                            }
-                        } else {
-                            "No peers found"
-                        }
-                    _awgStatusMessage.value = message
-                }.onFailure { error ->
-                    TSLog.e("MainViewModel", "Failed to load AWG peers: ${error.message}")
-                    _awgStatusMessage.value = "Failed to get AWG config info: ${error.message}"
-                }
-        }
-    }
-
-    fun loadLocalAwgStatus() {
-        val client = Client(viewModelScope)
-        TSLog.d("MainViewModel", "Loading local AWG configuration status")
-        client.getLocalPrefs { result ->
-            result
-                .onSuccess { prefs ->
-                    val hasLocalAwg = prefs.AmneziaWG?.hasNonDefaultValues() == true
-            appViewModel.setLocalAwgConfigured(hasLocalAwg)
-                    TSLog.d("MainViewModel", "Local AWG status loaded: hasAwgConfig=$hasLocalAwg")
-                }.onFailure { error ->
-                    TSLog.e("MainViewModel", "Failed to load local AWG status: ${error.message}")
-            appViewModel.setLocalAwgConfigured(false)
-                }
-        }
-    }
-
-    fun clearAwgStatusMessage() {
-        _awgStatusMessage.value = null
-    }
-
-    fun syncAwgConfigFromPeer(
-        hostname: String,
-        timeout: Int = 10,
-    ) {
-      val peerData = peerKeyCandidates(hostname).firstNotNullOfOrNull { key -> _awgPeersData.value[key] }
-        if (peerData == null) {
-            _awgStatusMessage.value = "Peer $hostname AWG config info not found"
-            return
-        }
-        if (!peerData.hasAwgConfig) {
-            _awgStatusMessage.value = "Peer $hostname has no AWG config"
-            return
-        }
-        val netmap = Notifier.netmap.value
-        val targetKey = normalizePeerKey(hostname)
-        val fullNodeKey =
-          netmap?.let { nm ->
-            val allNodes = listOfNotNull(nm.SelfNode) + (nm.Peers ?: emptyList())
-            allNodes
-              .find { node ->
-                val nodeKey = normalizePeerKey(node.Hostinfo.Hostname ?: node.ComputedName ?: node.Name)
-                nodeKey == targetKey
-              }?.Key
-          }
-        if (fullNodeKey.isNullOrEmpty()) {
-            _awgStatusMessage.value = "Cannot find full nodeKey for peer $hostname"
-            TSLog.e("MainViewModel", "Could not find full nodeKey for hostname: $hostname")
-            return
-        }
-        _awgSyncInProgress.value = hostname
-        TSLog.d("MainViewModel", "Starting AWG sync from peer: $hostname")
-        TSLog.d("MainViewModel", "NetMap full nodeKey: $fullNodeKey")
-        val client = Client(viewModelScope)
-        client.awgSyncApply(fullNodeKey, timeout) { result ->
-            _awgSyncInProgress.value = null
-            result
-                .onSuccess { appliedConfig ->
-                    TSLog.d("MainViewModel", "AWG config applied successfully from $hostname: $appliedConfig")
-              appViewModel.setLocalAwgConfigured(appliedConfig.hasNonDefaultValues())
-                    _awgStatusMessage.value = "AWG config from $hostname applied successfully"
-                    autoReconnectForAwgConfig()
-                }.onFailure { error ->
-                    TSLog.e("MainViewModel", "Failed to apply AWG config from $hostname: ${error.message}")
-                    val errorMessage = parseAwgApplyError(error, hostname)
-                    _awgStatusMessage.value = errorMessage
-                }
-        }
-    }
-
-    fun getAwgConfigForPeer(hostname: String): AwgPeerResult? = _awgPeersData.value[hostname]
-
-    private fun autoReconnectForAwgConfig() {
-        viewModelScope.launch {
-            try {
-          TSLog.d("MainViewModel", "Restarting VPN for AWG config change")
-          restartVPN()
-          TSLog.d("MainViewModel", "VPN restart requested for AWG config change")
-            } catch (e: Exception) {
-                TSLog.e("MainViewModel", "Auto-reconnect failed: ${e.message}")
-                _awgStatusMessage.value = "AWG config applied but auto-reconnect failed: ${e.message}"
+  fun loadAwgPeersStatus() {
+    if (awgPeersLoading) return
+    awgPeersLoading = true
+    Client(viewModelScope).awgSyncPeers { result ->
+      awgPeersLoading = false
+      result
+          .onSuccess { peers ->
+            val statusMap = mutableMapOf<String, Boolean>()
+            val peerDataMap = mutableMapOf<String, AwgPeerResult>()
+            peers.forEach { peer ->
+              resultKeyCandidates(peer).forEach { key ->
+                statusMap[key] = peer.hasAwgConfig
+                peerDataMap.putIfAbsent(key, peer)
+              }
             }
-        }
+            _awgPeersStatus.value = statusMap
+            _awgPeersData.value = peerDataMap
+            val configured = peers.count(AwgPeerResult::hasAwgConfig)
+            val failed = peers.count(AwgPeerResult::lookupFailed)
+            _awgStatusMessage.value =
+                when {
+                  peers.isEmpty() -> "No online peers found"
+                  failed > 0 ->
+                      "Found $configured/${peers.size} AWG peers; $failed could not be checked"
+                  configured > 0 -> "Found $configured/${peers.size} peers with AWG config"
+                  else -> "Checked ${peers.size} peers; all use standard WireGuard"
+                }
+          }
+          .onFailure { error ->
+            TSLog.e("MainViewModel", "Failed to load AWG peers: ${error.message}")
+            _awgStatusMessage.value = "Could not refresh AWG peers: ${error.message}"
+          }
     }
+  }
+
+  fun loadLocalAwgStatus() {
+    val client = Client(viewModelScope)
+    TSLog.d("MainViewModel", "Loading local AWG configuration status")
+    client.getLocalPrefs { result ->
+      result
+          .onSuccess { prefs ->
+            val hasLocalAwg = prefs.AmneziaWG?.hasNonDefaultValues() == true
+            appViewModel.setLocalAwgConfigured(hasLocalAwg)
+            TSLog.d("MainViewModel", "Local AWG status loaded: hasAwgConfig=$hasLocalAwg")
+          }
+          .onFailure { error ->
+            TSLog.e("MainViewModel", "Failed to load local AWG status: ${error.message}")
+            // Keep the last confirmed value. A transient LocalAPI failure must not be displayed as
+            // "standard WireGuard" or overwrite the status of an inherited profile.
+          }
+    }
+  }
+
+  fun clearAwgStatusMessage() {
+    _awgStatusMessage.value = null
+  }
+
+  fun syncAwgConfigFromPeer(peer: Tailcfg.Node, timeout: Int = 10) {
+    val hostname = peer.displayName
+    val peerData = getAwgConfigForPeer(peer)
+    if (peerData == null) {
+      _awgStatusMessage.value = "AWG status for $hostname is not loaded; refresh and retry"
+      return
+    }
+    if (peerData.lookupFailed) {
+      _awgStatusMessage.value = "Could not check $hostname: ${peerData.error}"
+      return
+    }
+    if (!peerData.hasAwgConfig) {
+      _awgStatusMessage.value = "$hostname uses standard WireGuard"
+      return
+    }
+    val fullNodeKey = peerData.nodeKey.takeIf { it.startsWith("nodekey:") } ?: peer.Key
+    if (!fullNodeKey.startsWith("nodekey:")) {
+      _awgStatusMessage.value = "No full node key is available for $hostname"
+      return
+    }
+    _awgSyncInProgress.value = peer.StableID
+    Client(viewModelScope).awgSyncApply(fullNodeKey, timeout) { result ->
+      _awgSyncInProgress.value = null
+      result
+          .onSuccess { config ->
+            appViewModel.setLocalAwgConfigured(config.hasNonDefaultValues())
+            _awgStatusMessage.value = "${config.versionLabel()} synced from $hostname"
+            // EditPrefs performs a live wgengine reconfiguration; restarting VpnService here can
+            // interrupt the control connection during a mobile upgrade.
+          }
+          .onFailure { error ->
+            TSLog.e("MainViewModel", "Failed to apply AWG config from $hostname: ${error.message}")
+            _awgStatusMessage.value = parseAwgApplyError(error, hostname)
+          }
+    }
+  }
+
+  fun getAwgConfigForPeer(peer: Tailcfg.Node): AwgPeerResult? =
+      peerKeyCandidates(peer).firstNotNullOfOrNull { _awgPeersData.value[it] }
+
+  fun hasAwgConfigForPeer(peer: Tailcfg.Node, status: Map<String, Boolean>): Boolean =
+      peerKeyCandidates(peer).any { status[it] == true }
 
   fun setVpnPermissionLauncher(launcher: ActivityResultLauncher<Intent>) {
     // No intent means we're already authorized
     vpnPermissionLauncher = launcher
   }
 
-    private fun parseAwgApplyError(
-        error: Throwable,
-        hostname: String,
-    ): String {
-        val message = error.message ?: ""
-        TSLog.e("MainViewModel", "Raw error message: $message")
-        return when {
-            message.contains("405") || message.contains("only POST allowed") ->
-                "Request method error, only POST allowed"
-            message.contains("403") || message.contains("access denied") || message.contains("awg-sync-apply access denied") ->
-                "Access denied, cannot apply AWG config"
-            message.contains("400") || message.contains("invalid JSON") ->
-                when {
-                    message.contains("nodeKey required") -> "NodeKey cannot be empty"
-                    message.contains("invalid JSON") -> "Request format error - JSON parsing failed: $message"
-                    else -> "Request parameter error - Details: $message"
-                }
-            message.contains("404") || message.contains("peer not found") ->
-                "Target peer $hostname not in network or offline"
-            message.contains("409") || message.contains("no Amnezia-WG config") || message.contains("peer has no Amnezia-WG config") ->
-                "Target peer $hostname has no AWG config"
-            message.contains("500") ->
-                when {
-                    message.contains("no netmap available") -> "Network map unavailable, please try again later"
-                    message.contains("failed to fetch config") -> "Cannot fetch config from target peer"
-                    message.contains("failed to apply config") -> "Config apply failed, please check permissions"
-                    else -> "Server internal error: $message"
-                }
-            message.contains("timeout") || message.contains("Timeout") ->
-                "Operation timeout, please retry"
+  private fun parseAwgApplyError(
+      error: Throwable,
+      hostname: String,
+  ): String {
+    val message = error.message ?: ""
+    TSLog.e("MainViewModel", "Raw error message: $message")
+    return when {
+      message.contains("405") || message.contains("only POST allowed") ->
+          "Request method error, only POST allowed"
+      message.contains("403") ||
+          message.contains("access denied") ||
+          message.contains("awg-sync-apply access denied") ->
+          "Access denied, cannot apply AWG config"
+      message.contains("400") || message.contains("invalid JSON") ->
+          when {
+            message.contains("nodeKey required") -> "NodeKey cannot be empty"
+            message.contains("invalid JSON") ->
+                "Request format error - JSON parsing failed: $message"
+            else -> "Request parameter error - Details: $message"
+          }
+      message.contains("404") || message.contains("peer not found") ->
+          "Target peer $hostname not in network or offline"
+      message.contains("409") ||
+          message.contains("no Amnezia-WG config") ||
+          message.contains("peer has no Amnezia-WG config") ->
+          "Target peer $hostname has no AWG config"
+      message.contains("500") ->
+          when {
             message.contains("no netmap available") ->
-                "Network connection unavailable, please check network status"
-            message.contains("failed to fetch config") ->
-                "Cannot fetch config from peer $hostname, please check peer status"
+                "Network map unavailable, please try again later"
+            message.contains("failed to fetch config") -> "Cannot fetch config from target peer"
             message.contains("failed to apply config") ->
-                "Apply config failed, please check local permissions"
-            else -> "AWG config apply failed, raw error: $message"
-        }
+                "Config apply failed, please check permissions"
+            else -> "Server internal error: $message"
+          }
+      message.contains("timeout") || message.contains("Timeout") ->
+          "Operation timeout, please retry"
+      message.contains("no netmap available") ->
+          "Network connection unavailable, please check network status"
+      message.contains("failed to fetch config") ->
+          "Cannot fetch config from peer $hostname, please check peer status"
+      message.contains("failed to apply config") ->
+          "Apply config failed, please check local permissions"
+      else -> "AWG config apply failed, raw error: $message"
     }
+  }
 }
 
 private fun userStringRes(currentState: State?, previousState: State?, vpnActive: Boolean): Int {

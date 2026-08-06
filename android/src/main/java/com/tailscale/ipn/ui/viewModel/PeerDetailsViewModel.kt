@@ -42,17 +42,40 @@ class PeerDetailsViewModel(
   // AWG configuration for this peer
   private val _awgConfig = MutableStateFlow<AwgPeerResult?>(null)
   val awgConfig: StateFlow<AwgPeerResult?> = _awgConfig
+  private var loadedAwgForNodeKey: String? = null
+
   private fun loadAwgConfigForPeer(peer: Tailcfg.Node) {
-      val client = Client(viewModelScope)
-      client.awgSyncPeers { result ->
-          result.onSuccess { awgPeers ->
-              val peerHostname = peer.ComputedName ?: peer.Name
-              val awgPeer = awgPeers.find { it.hostname == peerHostname }
-              _awgConfig.value = awgPeer
-          }.onFailure {
-              _awgConfig.value = null
+    if (loadedAwgForNodeKey == peer.Key) return
+    loadedAwgForNodeKey = peer.Key
+    Client(viewModelScope).awgSyncPeers { result ->
+      result
+          .onSuccess { peers ->
+            val names =
+                listOf(peer.Hostinfo.Hostname, peer.ComputedName, peer.Name).filterNotNull().map {
+                  it.trim().trimEnd('.').substringBefore('.').lowercase()
+                }
+            _awgConfig.value =
+                peers.find { result ->
+                  result.nodeKey == peer.Key ||
+                      result.tailscaleIP == peer.primaryIPv4Address ||
+                      result.hostname.trim().trimEnd('.').substringBefore('.').lowercase() in names
+                }
+                    ?: AwgPeerResult(
+                        nodeKey = peer.Key,
+                        hostname = peer.displayName,
+                        error = "Peer is offline or unavailable for AWG discovery",
+                    )
           }
-      }
+          .onFailure { error ->
+            loadedAwgForNodeKey = null
+            _awgConfig.value =
+                AwgPeerResult(
+                    nodeKey = peer.Key,
+                    hostname = peer.displayName,
+                    error = error.message ?: "AWG discovery failed",
+                )
+          }
+    }
   }
 
   init {
