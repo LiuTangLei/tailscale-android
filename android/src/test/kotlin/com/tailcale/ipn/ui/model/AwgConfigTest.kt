@@ -120,4 +120,35 @@ class AwgConfigTest {
     assertTrue(failed.lookupFailed)
     assertFalse(failed.hasAwgConfig)
   }
+
+  @Test
+  fun backgroundPeerRefreshIsSilent() {
+    val peers =
+        listOf(
+            AwgPeerResult(
+                nodeKey = "nodekey:test",
+                hostname = "peer",
+                config = AmneziaWGPrefs(JC = 1),
+            ))
+
+    assertNull(awgRefreshMessage(peers, AwgRefreshFeedback.SILENT))
+  }
+
+  @Test
+  fun userRequestedPeerRefreshReportsSummary() {
+    val peers =
+        listOf(
+            AwgPeerResult(
+                nodeKey = "nodekey:configured",
+                hostname = "configured",
+                config = AmneziaWGPrefs(JC = 1),
+            ),
+            AwgPeerResult(nodeKey = "nodekey:failed", hostname = "failed", error = "timeout"),
+        )
+
+    assertEquals(
+        "Found 1/2 AWG peers; 1 could not be checked",
+        awgRefreshMessage(peers, AwgRefreshFeedback.USER_REQUESTED),
+    )
+  }
 }

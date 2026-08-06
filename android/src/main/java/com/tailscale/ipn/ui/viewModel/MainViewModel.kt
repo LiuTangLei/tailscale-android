@@ -19,9 +19,11 @@ import com.tailscale.ipn.R
 import com.tailscale.ipn.mdm.MDMSettings
 import com.tailscale.ipn.ui.localapi.Client
 import com.tailscale.ipn.ui.model.AwgPeerResult
+import com.tailscale.ipn.ui.model.AwgRefreshFeedback
 import com.tailscale.ipn.ui.model.Ipn
 import com.tailscale.ipn.ui.model.Ipn.State
 import com.tailscale.ipn.ui.model.Tailcfg
+import com.tailscale.ipn.ui.model.awgRefreshMessage
 import com.tailscale.ipn.ui.notifier.Notifier
 import com.tailscale.ipn.ui.util.PeerCategorizer
 import com.tailscale.ipn.ui.util.PeerSet
@@ -100,7 +102,7 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
   private val _awgPeersStatus = MutableStateFlow<Map<String, Boolean>>(emptyMap())
   val awgPeersStatus: StateFlow<Map<String, Boolean>> = _awgPeersStatus
 
-  // AWG status message for toast
+  // AWG user-action result message for toast. Background discovery stays silent.
   private val _awgStatusMessage = MutableStateFlow<String?>(null)
   val awgStatusMessage: StateFlow<String?> = _awgStatusMessage
 
@@ -305,7 +307,7 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     autoFocusSearch = false
   }
 
-  fun loadAwgPeersStatus() {
+  fun loadAwgPeersStatus(feedback: AwgRefreshFeedback = AwgRefreshFeedback.SILENT) {
     if (awgPeersLoading) return
     awgPeersLoading = true
     Client(viewModelScope).awgSyncPeers { result ->
@@ -322,20 +324,13 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
             }
             _awgPeersStatus.value = statusMap
             _awgPeersData.value = peerDataMap
-            val configured = peers.count(AwgPeerResult::hasAwgConfig)
-            val failed = peers.count(AwgPeerResult::lookupFailed)
-            _awgStatusMessage.value =
-                when {
-                  peers.isEmpty() -> "No online peers found"
-                  failed > 0 ->
-                      "Found $configured/${peers.size} AWG peers; $failed could not be checked"
-                  configured > 0 -> "Found $configured/${peers.size} peers with AWG config"
-                  else -> "Checked ${peers.size} peers; all use standard WireGuard"
-                }
+            awgRefreshMessage(peers, feedback)?.let { _awgStatusMessage.value = it }
           }
           .onFailure { error ->
             TSLog.e("MainViewModel", "Failed to load AWG peers: ${error.message}")
-            _awgStatusMessage.value = "Could not refresh AWG peers: ${error.message}"
+            if (feedback == AwgRefreshFeedback.USER_REQUESTED) {
+              _awgStatusMessage.value = "Could not refresh AWG peers: ${error.message}"
+            }
           }
     }
   }

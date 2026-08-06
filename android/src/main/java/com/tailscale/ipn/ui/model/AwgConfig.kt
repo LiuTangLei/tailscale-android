@@ -117,6 +117,29 @@ data class AwgPeerResult(
     get() = !error.isNullOrBlank()
 }
 
+/** Controls whether a peer discovery refresh should interrupt the user with a result toast. */
+enum class AwgRefreshFeedback {
+  SILENT,
+  USER_REQUESTED,
+}
+
+/** Returns a refresh summary only when the user explicitly requested the discovery. */
+fun awgRefreshMessage(
+    peers: List<AwgPeerResult>,
+    feedback: AwgRefreshFeedback,
+): String? {
+  if (feedback == AwgRefreshFeedback.SILENT) return null
+
+  val configured = peers.count(AwgPeerResult::hasAwgConfig)
+  val failed = peers.count(AwgPeerResult::lookupFailed)
+  return when {
+    peers.isEmpty() -> "No online peers found"
+    failed > 0 -> "Found $configured/${peers.size} AWG peers; $failed could not be checked"
+    configured > 0 -> "Found $configured/${peers.size} peers with AWG config"
+    else -> "Checked ${peers.size} peers; all use standard WireGuard"
+  }
+}
+
 @Serializable
 data class AmneziaWGPrefs(
     @SerialName("JC") @JsonNames("jc") val JC: Int? = null,

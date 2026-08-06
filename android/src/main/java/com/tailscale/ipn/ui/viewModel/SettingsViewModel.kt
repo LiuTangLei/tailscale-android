@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.tailscale.ipn.App
 import com.tailscale.ipn.ui.localapi.Client
 import com.tailscale.ipn.ui.model.AwgPeerResult
+import com.tailscale.ipn.ui.model.AwgRefreshFeedback
+import com.tailscale.ipn.ui.model.awgRefreshMessage
 import com.tailscale.ipn.ui.notifier.Notifier
 import com.tailscale.ipn.ui.util.LoadingIndicator
 import com.tailscale.ipn.ui.util.set
@@ -75,17 +77,8 @@ class SettingsViewModel : IpnViewModel() {
     client.awgSyncPeers { result ->
       result
           .onSuccess { awgPeers: List<AwgPeerResult> ->
-            val awgCount = awgPeers.count { it.hasAwgConfig }
-            val failedCount = awgPeers.count { it.lookupFailed }
-            val total = awgPeers.size
             _awgRefreshMessage.value =
-                when {
-                  total == 0 -> "No online peers found"
-                  failedCount > 0 ->
-                      "Found $awgCount/$total AWG peers; $failedCount could not be checked"
-                  awgCount > 0 -> "Found $awgCount/$total peers with AWG config"
-                  else -> "Checked $total peers; all use standard WireGuard"
-                }
+                awgRefreshMessage(awgPeers, AwgRefreshFeedback.USER_REQUESTED)
           }
           .onFailure { error ->
             TSLog.e("SettingsViewModel", "Failed to refresh AWG peers: ${error.message}")
