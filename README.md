@@ -1,6 +1,6 @@
 # Tailscale Android Client — AWG / QUIC fork
 
-## 1.102.4 QUIC preview
+## 1.102.4 AWG / QUIC release
 
 This fork adds **one QUIC option** to Settings while retaining native AWG v2/v3.
 Selecting a mode reconstructs the actual Android Go packet engine and verifies
@@ -12,14 +12,16 @@ WireGuard-over-QUIC. Both communicating devices need compatible active modes.
 The core is pinned to corrected 1.102.4 source `1f00235ed2ce`, not a mutable tag
 cache or a local source replacement.
 
-The [1.102.4 preview](https://github.com/LiuTangLei/tailscale-android/releases/tag/v1.102.4)
-contains a development-signed **test APK** and an **unsigned release APK**.
-The original production signing credentials are not configured in this build
-environment. The test APK does **not** share v1.102.2's release certificate and
-must not be presented as an in-place update. Keep existing production data and
-use a separate test device/emulator; do not uninstall a working production app
-for this preview. The signed stable version remains v1.102.2 until the original
-release key can sign the new build.
+The [1.102.4 release](https://github.com/LiuTangLei/tailscale-android/releases/tag/v1.102.4)
+now provides **`tailscale-release-signed.apk`**, built with the original
+`make release-signed` workflow and the existing local release keystore.
+It is signed by the same certificate as this fork's v1.102.2. A direct in-place
+upgrade was tested on a disposable emulator: existing test data, installed UID
+and first-install time were preserved, and the upgraded release app launched.
+No uninstall is needed for matching-signature installations. Official Tailscale,
+other forks and the earlier development-signed APK are not covered by that claim.
+The previous test/unsigned preview downloads were superseded and removed from
+this release; v1.102.4 is now the signed stable release.
 
 Controlled emulator tests cover real engine restart, preserved identity,
 QUIC/AWG switching, an encrypted round trip through a private DERP to a desktop
@@ -28,7 +30,7 @@ They are not long-duration field validation on every phone or network.
 See [implementation, test and signing notes](docs/quic-1.102.4-work-report.md).
 
 The upstream distribution information below refers to official Tailscale, not
-to this fork's AWG/QUIC preview packages.
+to this fork's AWG/QUIC release packages.
 
 https://tailscale.com
 

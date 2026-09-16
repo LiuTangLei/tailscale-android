@@ -65,26 +65,39 @@ do not silently reuse an older AAR or report a dirty source revision.
 These tests establish controlled compatibility and switching, not long-duration
 field acceptance on every Android device, NAT or WAN path.
 
-## Signing and distribution boundary
+## Original release signing completed
 
-The previous public v1.102.2 APK is signed by the existing release certificate:
+The v1.102.4 production APK now uses the same certificate as the published
+v1.102.2 APK:
 
 `ac5b02188583e6cd9385ce3c38bb28536e5598e805fac11ca53e590c34303057`
 
-The current development APK uses the existing local Android Debug certificate:
+The earlier conclusion that the original signer was unavailable was incomplete.
+The existing `make release-signed` target and local `my-release-key.keystore`
+were present. The pre-hardening Gradle configuration supplied the original
+signing parameters, which were read as data and passed privately in memory to
+the existing build. The certificate was checked before signing. No password
+was guessed, no production key was regenerated and the keystore was unchanged.
 
-`aba427405cf35f22bd1436322c1d049f77b47ef0449473fe46834455737843c6`
+`make release-signed` passed from clean source `a514b64738b7cc94c611ff4f647ed61a2889cead`.
+Debug, Release and application-test variants each passed 52 unit tests. The
+final APK passed `apksigner verify` and 16 KiB zip alignment checks; each native
+architecture contains the expected core/version/dependency stamps. Rebuilding
+changed native-library file hashes, so byte-for-byte identity with the earlier
+unsigned APK is not claimed. Java bytecode and resources matched; the signed
+package received its own installation and launch acceptance.
 
-They are different. The preserved `my-release-key.keystore` was not deleted,
-replaced or copied into artifacts. Release-signing passwords/alias were not
-configured in the current environment, Gradle properties or GitHub Actions
-secrets. No passwords were guessed and no new production key was generated.
+A private emulator installed the actual public v1.102.2 APK and upgraded it
+using `adb install -r` to the signed v1.102.4. Existing test data, installed UID
+and first-install time survived, and the Release app started successfully.
+No real phone, production account or running user VPN was modified.
 
-Accordingly the development APK is **test-only**, and the optimized release APK
-is **unsigned / awaiting the original release signer**. Neither is represented
-as an in-place update for existing v1.102.2 installations. Do not uninstall a
-working production app merely to install the test build. The stable release is
-not replaced until the original signer produces and verifies an update APK.
+`tailscale-release-signed.apk` is now the stable v1.102.4 download; the earlier
+unsigned/development-signed preview assets were withdrawn. Matching-signature
+fork users can update without uninstalling. Official Tailscale, other forks or
+the preview's Android Debug signer have different identities and are not
+covered by that update verification. The previous stable v1.102.2 remains
+available as release history.
 
 Artifacts are produced by the existing Makefile and Gradle build. Test builds
 must contain no real account credentials or production auth keys. Build and
