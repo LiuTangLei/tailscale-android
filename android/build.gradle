@@ -61,7 +61,7 @@ android {
         // the Makefile's release-tv target rewrites this integer to end in 1 for
         // AndroidTV builds so phone (...0) and TV (...1) uploads stay
         // distinguishable in the Play Store.
-        versionCode 297646690
+        versionCode 298264060
         versionName getVersionProperty("VERSION_LONG")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
@@ -122,6 +122,10 @@ android {
         }
         debug {
             manifestPlaceholders.leanbackRequired = isTV()
+            // Local smoke tests must never embed real login credentials.
+            buildConfigField "String", "GITHUB_USERNAME", '""'
+            buildConfigField "String", "GITHUB_PASSWORD", '""'
+            buildConfigField "String", "GITHUB_2FA_SECRET", '""'
         }
         release {
             manifestPlaceholders.leanbackRequired = isTV()
@@ -140,7 +144,7 @@ android {
         }
     }
 
-    testBuildType "applicationTest"
+    testBuildType (project.findProperty("quicSmoke") == "true" ? "debug" : "applicationTest")
 }
 
 dependencies {

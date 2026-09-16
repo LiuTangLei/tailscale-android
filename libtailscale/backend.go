@@ -38,6 +38,7 @@ import (
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/transportprofile"
 )
 
 type App struct {
@@ -56,8 +57,11 @@ type App struct {
 
 	localAPIHandler http.Handler
 	backend         *ipnlocal.LocalBackend
-	ready           sync.WaitGroup
 	backendMu       sync.Mutex
+	backendChanged  chan struct{}
+	backendErr      error
+	restartRequests chan chan error
+	transportMu     sync.Mutex
 
 	// logger is the logtail logger whose uploads follow the user's
 	// IsClientLoggingEnabled preference. Populated once runBackend wires
@@ -95,6 +99,8 @@ func start(dataDir, directFileRoot string, hwAttestationPref bool, appCtx AppCon
 type backend struct {
 	engine     wgengine.Engine
 	backend    *ipnlocal.LocalBackend
+	netstack   *netstack.Impl
+	dialer     *tsdial.Dialer
 	sys        *tsd.System
 	devices    *multiTUN
 	settings   settingsFunc
@@ -104,8 +110,10 @@ type backend struct {
 
 	logIDPublic logid.PublicID
 	logger      *logtail.Logger
+	stopLogs    func()
 
-	bus *eventbus.Bus
+	bus     *eventbus.Bus
+	started chan error
 
 	// avoidEmptyDNS controls whether to use fallback nameservers
 	// when no nameservers are provided by Tailscale.
@@ -129,6 +137,28 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 		return a.deviceName(), nil
 	})
 
+	var restarted chan error
+	for {
+		next, err := a.runBackendGeneration(ctx, hardwareAttestation, restarted)
+		if err != nil {
+			a.publishBackend(nil, nil, err)
+			if restarted != nil {
+				restarted <- err
+			}
+			return err
+		}
+		if next == nil {
+			return nil
+		}
+		restarted = next
+	}
+}
+
+// Each generation owns its engine, TUN facade, notifications and configuration
+// channels. Reconfiguration cannot start a second engine over the same state.
+func (a *App) runBackendGeneration(parent context.Context, hardwareAttestation bool, restarted chan error) (chan error, error) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
 	type configPair struct {
 		rcfg *router.Config
 		dcfg *dns.OSConfig
@@ -139,21 +169,34 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 		if rcfg == nil {
 			return nil
 		}
-		configs <- configPair{rcfg, dcfg}
-		return <-configErrs
+		select {
+		case configs <- configPair{rcfg, dcfg}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		select {
+		case err := <-configErrs:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	})
 	if err != nil {
-		return err
+		cancel()
+		if b != nil {
+			b.shutdown()
+		}
+		return nil, err
 	}
 	a.logIDPublicAtomic.Store(&b.logIDPublic)
 	a.logger.Store(b.logger)
-	a.backend = b.backend
 	if hardwareAttestation {
-		a.backend.SetHardwareAttested()
+		b.backend.SetHardwareAttested()
 	}
 	defer func() {
-		b.devices.Down()
-		b.CloseTUNs()
+		a.publishBackend(nil, nil, nil)
+		cancel() // unblock routing callbacks before shutting down the engine
+		b.shutdown()
 	}()
 
 	hc := localapi.HandlerConfig{
@@ -166,9 +209,8 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 	h := localapi.NewHandler(hc)
 	h.PermitRead = true
 	h.PermitWrite = true
-	a.localAPIHandler = h
-
-	a.ready.Done()
+	// Publish the handler only after LocalBackend.Start has completed. The
+	// event loop below must meanwhile service its VPN configuration callbacks.
 
 	// Contrary to the documentation for VpnService.Builder.addDnsServer,
 	// ChromeOS doesn't fall back to the underlying network nameservers if
@@ -183,12 +225,30 @@ func (a *App) runBackend(ctx context.Context, hardwareAttestation bool) error {
 	stateCh := make(chan ipn.State)
 	go b.backend.WatchNotifications(ctx, ipn.NotifyInitialPrefs|ipn.NotifyInitialState|ipn.NotifyNoNetMap, func() {}, func(notify *ipn.Notify) bool {
 		if notify.State != nil {
-			stateCh <- *notify.State
+			select {
+			case stateCh <- *notify.State:
+			case <-ctx.Done():
+				return false
+			}
 		}
 		return true
 	})
 	for {
 		select {
+		case err := <-b.started:
+			if err != nil {
+				return nil, fmt.Errorf("start mobile backend: %w", err)
+			}
+			b.started = nil
+			a.publishBackend(b.backend, h, nil)
+			if restarted != nil {
+				restarted <- nil
+				restarted = nil
+			}
+		case request := <-a.restartRequests:
+			return request, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		case s := <-stateCh:
 			state = s
 			if state >= ipn.Starting && vpnService.service != nil && b.isConfigNonNilAndDifferent(cfg.rcfg, cfg.dcfg) {
@@ -299,6 +359,12 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 		settings: settings,
 		appCtx:   appCtx,
 		bus:      sys.Bus.Get(),
+		started:  make(chan error, 1),
+	}
+
+	transportCfg, transportRevision, transportErr := transportprofile.LoadForStart(dataDir)
+	if transportErr != nil {
+		return b, fmt.Errorf("packet transport profile: %w", transportErr)
 	}
 
 	var logID logid.PrivateID
@@ -321,37 +387,48 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 
 	netMon, err := netmon.New(b.bus, logf)
 	if err != nil {
-		log.Printf("netmon.New: %v", err)
+		return b, fmt.Errorf("netmon.New: %w", err)
 	}
 	b.netMon = netMon
 	b.setupLogs(dataDir, logID, logf, sys.HealthTracker.Get(), a.isClientLoggingEnabled())
 	dialer := new(tsdial.Dialer)
+	b.dialer = dialer
 	vf := &VPNFacade{
 		SetBoth:           b.setCfg,
 		GetBaseConfigFunc: b.getDNSBaseConfig,
 	}
+	transportSource := "default"
+	if transportRevision != "0" {
+		transportSource = "managed"
+	}
 	engine, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-		Tun:            b.devices,
-		Router:         vf,
-		DNS:            vf,
-		ReconfigureVPN: vf.ReconfigureVPN,
-		Dialer:         dialer,
-		SetSubsystem:   sys.Set,
-		NetMon:         b.netMon,
-		HealthTracker:  sys.HealthTracker.Get(),
-		Metrics:        sys.UserMetricsRegistry(),
-		DriveForLocal:  driveimpl.NewFileSystemForLocal(logf),
-		EventBus:       sys.Bus.Get(),
+		Tun:               b.devices,
+		Router:            vf,
+		DNS:               vf,
+		ReconfigureVPN:    vf.ReconfigureVPN,
+		Dialer:            dialer,
+		SetSubsystem:      sys.Set,
+		NetMon:            b.netMon,
+		HealthTracker:     sys.HealthTracker.Get(),
+		Metrics:           sys.UserMetricsRegistry(),
+		DriveForLocal:     driveimpl.NewFileSystemForLocal(logf),
+		EventBus:          sys.Bus.Get(),
+		Transport:         transportCfg,
+		TransportSource:   transportSource,
+		TransportRevision: transportRevision,
+		TransportManaged:  true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("runBackend: NewUserspaceEngine: %v", err)
+		return b, fmt.Errorf("runBackend: NewUserspaceEngine: %v", err)
 	}
+	b.engine = engine
 	sys.Set(engine)
 	b.logIDPublic = logID.Public()
 	ns, err := netstack.Create(logf, sys.Tun.Get(), engine, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
-		return nil, fmt.Errorf("netstack.Create: %w", err)
+		return b, fmt.Errorf("netstack.Create: %w", err)
 	}
+	b.netstack = ns
 	sys.Set(ns)
 	ns.ProcessLocalIPs = false // let Android kernel handle it; VpnBuilder sets this up
 	ns.ProcessSubnets = true   // for Android-being-an-exit-node support
@@ -360,32 +437,55 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 		w.Start()
 	}
 	lb, err := ipnlocal.NewLocalBackend(logf, logID.Public(), sys, 0)
+	if err == nil {
+		lb.SetVarRoot(dataDir)
+	}
+	if err != nil {
+		return b, fmt.Errorf("runBackend: NewLocalBackend: %v", err)
+	}
+	b.backend = lb
 	if ext, ok := ipnlocal.GetExt[*taildrop.Extension](lb); ok {
 		ext.SetFileOps(newAndroidFileOps(a.shareFileHelper))
 	}
-
-	if err != nil {
-		engine.Close()
-		return nil, fmt.Errorf("runBackend: NewLocalBackend: %v", err)
-	}
 	if err := ns.Start(lb); err != nil {
-		return nil, fmt.Errorf("startNetstack: %w", err)
+		return b, fmt.Errorf("startNetstack: %w", err)
 	}
 	if b.logger != nil {
 		lb.SetLogFlusher(b.logger.StartFlush)
 	}
-	b.engine = engine
-	b.backend = lb
 	b.sys = sys
-	go func() {
-		err := lb.Start(ipn.Options{})
-		if err != nil {
-			log.Printf("Failed to start LocalBackend, panicking: %s", err)
-			panic(err)
-		}
-		a.ready.Done()
-	}()
+	go func() { b.started <- lb.Start(ipn.Options{}) }()
 	return b, nil
+}
+
+// shutdown is called only by the generation owner, after canceling routing
+// callbacks. Partial-construction failures use the same cleanup path.
+func (b *backend) shutdown() {
+	if b.devices != nil {
+		b.devices.Down()
+		b.CloseTUNs()
+	}
+	if b.netstack != nil {
+		b.netstack.Close()
+	}
+	if b.backend != nil {
+		b.backend.Shutdown()
+	} else if b.engine != nil {
+		b.engine.Close()
+		<-b.engine.Done()
+	}
+	if b.stopLogs != nil {
+		b.stopLogs()
+	}
+	if b.netMon != nil {
+		b.netMon.Close()
+	}
+	if b.dialer != nil {
+		b.dialer.Close()
+	}
+	if b.bus != nil {
+		b.bus.Close()
+	}
 }
 
 func (a *App) watchFileOpsChanges() {

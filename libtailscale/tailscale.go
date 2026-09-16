@@ -5,6 +5,7 @@ package libtailscale
 
 import (
 	"context"
+	"io"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -34,11 +35,12 @@ const (
 
 func newApp(dataDir, directFileRoot string, hardwareAttestationPref bool, appCtx AppContext) Application {
 	a := &App{
-		directFileRoot: directFileRoot,
-		dataDir:        dataDir,
-		appCtx:         appCtx,
+		directFileRoot:  directFileRoot,
+		dataDir:         dataDir,
+		appCtx:          appCtx,
+		backendChanged:  make(chan struct{}),
+		restartRequests: make(chan chan error),
 	}
-	a.ready.Add(2)
 
 	a.store = newStateStore(a.appCtx)
 	a.policyStore = &syspolicyStore{a: a}
@@ -124,7 +126,7 @@ func (b *backend) setupLogs(logDir string, logID logid.PrivateID, logf logger.Lo
 	logcfg := logtail.Config{
 		Collection:          logtail.CollectionNode,
 		PrivateID:           logID,
-		Stderr:              log.Writer(),
+		Stderr:              &androidLogWriter{appCtx: b.appCtx},
 		MetricsDelta:        clientmetric.EncodeLogTailMetricsDelta,
 		IncludeProcID:       true,
 		IncludeProcSequence: true,
@@ -138,7 +140,9 @@ func (b *backend) setupLogs(logDir string, logID logid.PrivateID, logf logger.Lo
 	logcfg.FlushDelayFn = func() time.Duration { return 2 * time.Minute }
 
 	filchOpts := filch.Options{
-		ReplaceStderr: true,
+		// stdout/stderr already go to Android logcat; do not repeatedly
+		// redirect process descriptors when a transport engine is replaced.
+		ReplaceStderr: false,
 	}
 
 	var filchErr error
@@ -164,12 +168,28 @@ func (b *backend) setupLogs(logDir string, logID logid.PrivateID, logf logger.Lo
 		log.Printf("SetupLogs: filch setup failed: %v", filchErr)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for {
 			select {
 			case logstr := <-onLog:
 				b.logger.Logf("%s", logstr)
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
+	b.stopLogs = func() {
+		cancel()
+		<-done
+		log.SetOutput(&androidLogWriter{appCtx: b.appCtx})
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stop()
+		b.logger.Shutdown(shutdownCtx)
+		if closer, ok := logcfg.Buffer.(io.Closer); ok {
+			closer.Close()
+		}
+	}
 }

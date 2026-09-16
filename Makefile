@@ -213,8 +213,9 @@ tailscale-test.apk: version gradle-dependencies
 	(cd android && ./gradlew assembleApplicationTestAndroidTest)
 	install -C ./android/build/outputs/apk/androidTest/applicationTest/android-applicationTest-androidTest.apk $@
 
-tailscale.version: go.mod go.sum go.toolchain.rev $(wildcard .git/HEAD)
-	@bash -c "GOFLAGS='-mod=readonly' ./tool/go run tailscale.com/cmd/mkversion > tailscale.version"
+.PHONY: tailscale.version
+tailscale.version: go.mod go.sum go.toolchain.rev scripts/stamp_android_version.py
+	@GOFLAGS='-mod=readonly' python3 scripts/stamp_android_version.py > tailscale.version
 
 .PHONY: version
 version: tailscale.version
@@ -255,6 +256,9 @@ build-unstripped-aar: check-java tailscale.version $(GOBIN)/gomobile
 
 $(UNSTRIPPED_AAR): build-unstripped-aar
 
+# gomobile's phony build regenerates the archive in-place. Force downstream
+# extraction/repacking too, or make can keep the previous AAR and version stamp.
+.PHONY: libgojni.so.unstripped libgojni.so.debug libgojni.so.stripped $(LIBTAILSCALE_AAR)
 libgojni.so.unstripped: $(UNSTRIPPED_AAR)
 	@echo "Extracting libgojni.so from unstripped AAR..."
 	@if unzip -p $(ABS_UNSTRIPPED_AAR) jni/arm64-v8a/libgojni.so > libgojni.so.unstripped; then \

@@ -16,6 +16,8 @@ import com.tailscale.ipn.ui.model.IpnState
 import com.tailscale.ipn.ui.model.LocalPrefs
 import com.tailscale.ipn.ui.model.StableNodeID
 import com.tailscale.ipn.ui.model.Tailcfg
+import com.tailscale.ipn.ui.model.TransportControlRequest
+import com.tailscale.ipn.ui.model.TransportStatus
 import com.tailscale.ipn.ui.util.InputStreamAdapter
 import com.tailscale.ipn.util.TSLog
 import java.nio.charset.Charset
@@ -56,6 +58,7 @@ private object Endpoint {
   const val DISABLE_EXIT_NODE = "set-use-exit-node-disabled"
   const val AWG_SYNC_PEERS = "awg-sync-peers"
   const val AWG_SYNC_APPLY = "awg-sync-apply"
+  const val PACKET_TRANSPORT = "packet-transport"
 }
 
 typealias StatusResponseHandler = (Result<IpnState.Status>) -> Unit
@@ -107,8 +110,46 @@ class Client(private val scope: CoroutineScope) {
   }
 
   fun editPrefs(prefs: Ipn.MaskedPrefs, responseHandler: (Result<Ipn.Prefs>) -> Unit) {
+    // AWG screens submit this independent profile alone. It must select the
+    // native engine as well when the currently running data plane is QUIC.
+    if (prefs.AmneziaWGSet == true) {
+      val otherChanges = listOf(prefs.ControlURLSet, prefs.RouteAllSet, prefs.CorpDNSSet,
+          prefs.ExitNodeIDSet, prefs.ExitNodeAllowLANAccessSet, prefs.WantRunningSet,
+          prefs.LoggedOutSet, prefs.ShieldsUpSet, prefs.AdvertiseRoutesSet,
+          prefs.ForceDaemonSet, prefs.HostnameSet).any { it == true }
+      if (!otherChanges) {
+        applyAwgProfile(prefs.AmneziaWG ?: AmneziaWGPrefs(), responseHandler)
+        return
+      }
+    }
     val body = Json.encodeToString(prefs).toByteArray()
     return patch(Endpoint.PREFS, body, responseHandler = responseHandler)
+  }
+
+  private fun applyAwgProfile(config: AmneziaWGPrefs, responseHandler: (Result<Ipn.Prefs>) -> Unit) {
+    packetTransportStatus { result ->
+      result.fold(onSuccess = { current ->
+        val request = TransportControlRequest(action = "awg", expectedRevision = current.revision, awg = config)
+        val body = Request.jsonEncoder.encodeToString(request).toByteArray()
+        post(Endpoint.PACKET_TRANSPORT, body, timeoutMillis = 60_000L) { changed: Result<TransportStatus> ->
+          changed.fold(onSuccess = { status ->
+            if (!status.isActive("native")) {
+              responseHandler(Result.failure(IllegalStateException("AWG was saved but the native engine is not active")))
+            } else {
+              getLocalPrefs { currentPrefs ->
+                currentPrefs.fold(onSuccess = { actual ->
+                  if (actual.AmneziaWG == config) {
+                    prefs(responseHandler)
+                  } else {
+                    responseHandler(Result.failure(IllegalStateException("The active AWG profile does not match the requested configuration")))
+                  }
+                }, onFailure = { responseHandler(Result.failure(it)) })
+              }
+            }
+          }, onFailure = { responseHandler(Result.failure(it)) })
+        }
+      }, onFailure = { responseHandler(Result.failure(it)) })
+    }
   }
 
   fun setUseExitNode(use: Boolean, responseHandler: (Result<Ipn.Prefs>) -> Unit) {
@@ -161,6 +202,26 @@ class Client(private val scope: CoroutineScope) {
     }
   }
 
+  fun packetTransportStatus(responseHandler: (Result<TransportStatus>) -> Unit) {
+    get(Endpoint.PACKET_TRANSPORT, timeoutMillis = 30_000L, responseHandler = responseHandler)
+  }
+
+  fun setPacketTransport(
+      mode: String,
+      expectedRevision: String = "",
+      responseHandler: (Result<TransportStatus>) -> Unit,
+  ) {
+    if (mode.isBlank()) {
+      responseHandler(Result.failure(IllegalArgumentException("Transport mode cannot be blank")))
+      return
+    }
+    val body =
+        Request.jsonEncoder
+            .encodeToString(TransportControlRequest(action = "mode", expectedRevision = expectedRevision, mode = mode))
+            .toByteArray()
+    post(Endpoint.PACKET_TRANSPORT, body, timeoutMillis = 60_000L, responseHandler = responseHandler)
+  }
+
   fun getLocalPrefs(responseHandler: (Result<LocalPrefs>) -> Unit) {
     get(Endpoint.PREFS, responseHandler = responseHandler)
   }
@@ -181,7 +242,7 @@ class Client(private val scope: CoroutineScope) {
     post(
         Endpoint.AWG_SYNC_APPLY,
         requestBody,
-        timeoutMillis = (validTimeout + 5) * 1_000L,
+        timeoutMillis = (validTimeout + 45) * 1_000L,
     ) { result: Result<AmneziaWGPrefs> ->
       result.exceptionOrNull()?.let { TSLog.e(TAG, "AWG sync apply failed: ${it.message}") }
       responseHandler(result)

@@ -69,6 +69,9 @@ fun SettingsView(
   val managedByOrganization by viewModel.managedByOrganization.collectAsState()
   val tailnetLockEnabled by viewModel.tailNetLockEnabled.collectAsState()
   val corpDNSEnabled by viewModel.corpDNSEnabled.collectAsState()
+  val transportStatus by viewModel.transportStatus.collectAsState()
+  val changingTransport by viewModel.isChangingTransport.collectAsState()
+  var showQuicConfirmation by remember { mutableStateOf(false) }
   val isVPNPrepared by appViewModel.vpnPrepared.collectAsState()
   val showTailnetLock by MDMSettings.manageTailnetLock.flow.collectAsState()
   val useTailscaleSubnets by MDMSettings.useTailscaleSubnets.flow.collectAsState()
@@ -84,6 +87,21 @@ fun SettingsView(
       Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
       viewModel.clearAwgRefreshMessage()
     }
+  }
+
+  if (showQuicConfirmation) {
+    AlertDialog(
+        onDismissRequest = { showQuicConfirmation = false },
+        title = { Text("Enable QUIC?") },
+        text = { Text("This clears the saved AWG profile and briefly reconnects the network. Other devices must use compatible QUIC. Keep a copy of your AWG profile to restore it later.") },
+        confirmButton = {
+          TextButton(onClick = {
+            showQuicConfirmation = false
+            viewModel.setPacketTransport(true, appViewModel)
+          }) { Text("Enable") }
+        },
+        dismissButton = { TextButton(onClick = { showQuicConfirmation = false }) { Text("Cancel") } },
+    )
   }
 
   if (showAwgDialog) {
@@ -155,6 +173,29 @@ fun SettingsView(
           }
 
           Lists.SectionDivider()
+          val packetTransportOn =
+              transportStatus?.let {
+                it.activeMode == "http3-ip" || it.activeMode == "quic-ip"
+              } ?: false
+          val packetTransportSubtitle =
+              when {
+                changingTransport -> "Applying the selected mode and reconnecting..."
+                transportStatus == null -> "Loading transport..."
+                transportStatus!!.pendingRestart -> "Saved mode is not active; select the mode again to retry."
+                packetTransportOn -> "QUIC with built-in obfuscation is active."
+                else -> "Native WireGuard / AWG is active."
+              }
+          Setting.Switch(
+              title = "QUIC",
+              subtitle = packetTransportSubtitle,
+              isOn = packetTransportOn,
+              enabled = transportStatus?.available == true && !changingTransport,
+              onToggle = { enabled ->
+                if (enabled) showQuicConfirmation = true
+                else viewModel.setPacketTransport(false, appViewModel)
+              })
+
+          Lists.ItemDivider()
           Setting.Text(
               title = "AmneziaWG",
               subtitle = "Generate, import, and sync AWG v2 or v3 profiles",

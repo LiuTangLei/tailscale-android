@@ -137,8 +137,6 @@ func (app *App) callLocalAPI(timeoutMillis int, method, endpoint string, header 
 		}
 	}()
 
-	app.ready.Wait()
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(uint64(timeoutMillis)*uint64(time.Millisecond)))
 	defer cancel()
 
@@ -173,7 +171,7 @@ func (app *App) callLocalAPI(timeoutMillis int, method, endpoint string, header 
 		}()
 
 		defer pipeWriter.Close()
-		app.localAPIHandler.ServeHTTP(resp, req)
+		app.serveMobileLocalAPI(resp, req)
 		resp.Flush()
 	}()
 

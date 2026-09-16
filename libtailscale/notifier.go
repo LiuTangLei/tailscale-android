@@ -7,35 +7,49 @@ import (
 	"context"
 	"encoding/json"
 	"log"
-	"runtime/debug"
 
 	"tailscale.com/ipn"
 )
 
 func (app *App) WatchNotifications(mask int, cb NotificationCallback) NotificationManager {
-	app.ready.Wait()
-
 	ctx, cancel := context.WithCancel(context.Background())
-	go app.backend.WatchNotifications(ctx, ipn.NotifyWatchOpt(mask), func() {}, func(notify *ipn.Notify) bool {
-		defer func() {
-			if p := recover(); p != nil {
-				log.Printf("panic in WatchNotifications %s: %s", p, debug.Stack())
-				panic(p)
+	go func() {
+		for ctx.Err() == nil {
+			backend, _, changed, err := app.backendSnapshot(ctx)
+			if err != nil {
+				return
 			}
-		}()
-
-		b, err := json.Marshal(notify)
-		if err != nil {
-			log.Printf("error: WatchNotifications: marshal notify: %s", err)
-			return true
+			watchCtx, stop := context.WithCancel(ctx)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				backend.WatchNotifications(watchCtx, ipn.NotifyWatchOpt(mask), func() {}, func(notify *ipn.Notify) bool {
+					data, err := json.Marshal(notify)
+					if err != nil {
+						log.Printf("notification encoding failed: %v", err)
+						return true
+					}
+					if err := cb.OnNotify(data); err != nil {
+						log.Printf("notification callback failed: %v", err)
+					}
+					return watchCtx.Err() == nil
+				})
+			}()
+			select {
+			case <-changed:
+			case <-ctx.Done():
+			case <-done:
+				// A backend shutdown can finish its watcher before its owner
+				// publishes the next generation. Avoid a hot resubscribe loop.
+				select {
+				case <-changed:
+				case <-ctx.Done():
+				}
+			}
+			stop()
+			<-done
 		}
-		err = cb.OnNotify(b)
-		if err != nil {
-			log.Printf("error: WatchNotifications: OnNotify: %s", err)
-			return true
-		}
-		return true
-	})
+	}()
 	return &notificationManager{cancel}
 }
 
@@ -43,6 +57,4 @@ type notificationManager struct {
 	cancel func()
 }
 
-func (nm *notificationManager) Stop() {
-	nm.cancel()
-}
+func (nm *notificationManager) Stop() { nm.cancel() }
