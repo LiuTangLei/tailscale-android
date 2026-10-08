@@ -79,10 +79,12 @@ fun AwgConfigViewerView(
                     onError = {
                       Toast.makeText(context, "Could not clear AWG config: $it", Toast.LENGTH_LONG)
                           .show()
-                    })
-              }) {
-                Text("Confirm", color = MaterialTheme.colorScheme.error)
-              }
+                    },
+                )
+              },
+          ) {
+            Text("Confirm", color = MaterialTheme.colorScheme.error)
+          }
         },
         dismissButton = { TextButton(onClick = { showClearConfirm = false }) { Text("Cancel") } },
     )
@@ -92,111 +94,124 @@ fun AwgConfigViewerView(
       topBar = {
         Header(
             title = { Text("Local AWG Config", style = MaterialTheme.typography.titleLarge) },
-            onBack = onBack)
-      }) { innerPadding ->
-        when {
-          isLoading -> {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(innerPadding),
-                contentAlignment = Alignment.Center) {
-                  CircularProgressIndicator()
-                }
-          }
-          loadError != null -> {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(innerPadding),
-                contentAlignment = Alignment.Center) {
-                  Column(
-                      horizontalAlignment = Alignment.CenterHorizontally,
-                      modifier = Modifier.padding(32.dp)) {
-                        Text(
-                            text = "Could not load AWG configuration",
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = loadError.orEmpty(),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(onClick = viewModel::loadConfig) { Text("Retry") }
-                      }
-                }
-          }
-          configJson != null -> {
-            Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-              // JSON content area (scrollable)
-              Column(
-                  modifier =
-                      Modifier.weight(1f)
-                          .verticalScroll(rememberScrollState())
-                          .horizontalScroll(rememberScrollState())
-                          .padding(16.dp)) {
-                    Text(
-                        text = configJson!!,
-                        style =
-                            MaterialTheme.typography.bodyMedium.copy(
-                                fontFamily = FontFamily.Monospace),
-                    )
-                  }
-
-              // Action buttons at the bottom
-              Column(
-                  modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                  verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = {
-                          clipboardManager.setText(AnnotatedString(configJson!!))
-                          Toast.makeText(
-                                  context, "AWG config copied to clipboard", Toast.LENGTH_SHORT)
-                              .show()
-                        },
-                        modifier = Modifier.fillMaxWidth()) {
-                          Text("Copy JSON")
-                        }
-                    OutlinedButton(
-                        onClick = { showClearConfirm = true },
-                        enabled = !isClearing,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors =
-                            ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error)) {
-                          if (isClearing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                          }
-                          Text("Clear AWG Config")
-                        }
-                  }
-            }
-          }
-          else -> {
-            // Empty state
-            Box(
-                modifier = Modifier.fillMaxSize().padding(innerPadding),
-                contentAlignment = Alignment.Center) {
-                  Column(
-                      horizontalAlignment = Alignment.CenterHorizontally,
-                      modifier = Modifier.padding(32.dp)) {
-                        Text(
-                            text = "No AWG Configuration",
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text =
-                                "This device has no AmneziaWG profile. Open AWG Settings to generate v3, generate v2, or import JSON.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                        )
-                      }
-                }
+            onBack = onBack,
+        )
+      }
+  ) { innerPadding ->
+    when {
+      isLoading -> {
+        Box(
+            modifier = Modifier.fillMaxSize().padding(innerPadding),
+            contentAlignment = Alignment.Center,
+        ) {
+          CircularProgressIndicator()
+        }
+      }
+      loadError != null -> {
+        Box(
+            modifier = Modifier.fillMaxSize().padding(innerPadding),
+            contentAlignment = Alignment.Center,
+        ) {
+          Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              modifier = Modifier.padding(32.dp),
+          ) {
+            Text(
+                text = "Could not load AWG configuration",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = loadError.orEmpty(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(onClick = viewModel::loadConfig) { Text("Retry") }
           }
         }
       }
+      configJson != null -> {
+        Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+          // JSON content area (scrollable)
+          Column(
+              modifier =
+                  Modifier.weight(1f)
+                      .verticalScroll(rememberScrollState())
+                      .horizontalScroll(rememberScrollState())
+                      .padding(16.dp)
+          ) {
+            Text(
+                text = configJson!!,
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+            )
+          }
+
+          // Action buttons at the bottom
+          Column(
+              modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Button(
+                onClick = {
+                  clipboardManager.setText(AnnotatedString(configJson!!))
+                  Toast.makeText(
+                          context,
+                          "AWG config copied to clipboard",
+                          Toast.LENGTH_SHORT,
+                      )
+                      .show()
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+              Text("Copy JSON")
+            }
+            OutlinedButton(
+                onClick = { showClearConfirm = true },
+                enabled = !isClearing,
+                modifier = Modifier.fillMaxWidth(),
+                colors =
+                    ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    ),
+            ) {
+              if (isClearing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+              }
+              Text("Clear AWG Config")
+            }
+          }
+        }
+      }
+      else -> {
+        // Empty state
+        Box(
+            modifier = Modifier.fillMaxSize().padding(innerPadding),
+            contentAlignment = Alignment.Center,
+        ) {
+          Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              modifier = Modifier.padding(32.dp),
+          ) {
+            Text(
+                text = "No AWG Configuration",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text =
+                    "This device has no AmneziaWG profile. Open AWG Settings to generate v3, generate v2, or import JSON.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+          }
+        }
+      }
+    }
+  }
 }

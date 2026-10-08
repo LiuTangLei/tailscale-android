@@ -20,7 +20,7 @@ import com.tailscale.ipn.mdm.MDMSettings
 import com.tailscale.ipn.ui.localapi.Client
 import com.tailscale.ipn.ui.model.AwgPeerResult
 import com.tailscale.ipn.ui.model.AwgRefreshFeedback
-import com.tailscale.ipn.ui.model.Ipn
+import com.tailscale.ipn.ui.model.Favorites
 import com.tailscale.ipn.ui.model.Ipn.State
 import com.tailscale.ipn.ui.model.Netmap
 import com.tailscale.ipn.ui.model.Tailcfg
@@ -30,18 +30,24 @@ import com.tailscale.ipn.ui.util.PeerCategorizer
 import com.tailscale.ipn.ui.util.PeerSet
 import com.tailscale.ipn.ui.util.TimeUtil
 import com.tailscale.ipn.ui.util.set
+import com.tailscale.ipn.ui.util.withPinnedSection
 import com.tailscale.ipn.util.TSLog
 import java.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val AWG_REFRESH_RETRY_DELAYS_MILLIS = longArrayOf(2_000L, 5_000L)
 
@@ -59,44 +65,63 @@ class MainViewModelFactory(private val appViewModel: AppViewModel) : ViewModelPr
 class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
   // The user readable state of the system
   val stateRes: StateFlow<Int> = MutableStateFlow(userStringRes(State.NoState, State.NoState, true))
+
   // The expected state of the VPN toggle
   private val _vpnToggleState = MutableStateFlow(false)
   val vpnToggleState: StateFlow<Boolean> = _vpnToggleState
+
   // Keeps track of whether a toggle operation is in progress. This ensures that toggleVpn cannot be
   // invoked until the current operation is complete.
-  var isToggleInProgress = MutableStateFlow(false)
+  private val _isToggleInProgress = MutableStateFlow(false)
+  val isToggleInProgress: StateFlow<Boolean> = _isToggleInProgress
+
   // Permission to prepare VPN
   private var vpnPermissionLauncher: ActivityResultLauncher<Intent>? = null
   private val _requestVpnPermission = MutableStateFlow(false)
   val requestVpnPermission: StateFlow<Boolean> = _requestVpnPermission
+
   // Select Taildrop directory
   private var directoryPickerLauncher: ActivityResultLauncher<Uri?>? = null
+
   // The list of peers
   private val _peers = MutableStateFlow<List<PeerSet>>(emptyList())
   val peers: StateFlow<List<PeerSet>> = _peers
+
+  private val _groupedPeers = MutableStateFlow<List<PeerSet>>(emptyList())
+
   // The list of peers
   private val _searchViewPeers = MutableStateFlow<List<PeerSet>>(emptyList())
   val searchViewPeers: StateFlow<List<PeerSet>> = _searchViewPeers
+
   // The current state of the IPN for determining view visibility
   val ipnState = Notifier.state
+
+  private val favoritesManager = App.get().favoritesManager
+  val favorites: StateFlow<Favorites?> = favoritesManager.favorites
+  val isWritingFavorites: StateFlow<Boolean> = favoritesManager.writing
+
   // The active search term for filtering peers
   private val _searchTerm = MutableStateFlow("")
   val searchTerm: StateFlow<String> = _searchTerm
   var autoFocusSearch by mutableStateOf(true)
     private set
 
-  // True if we should render the key expiry bannder
+  // True if we should render the key expiry banner
   val showExpiry: StateFlow<Boolean> = MutableStateFlow(false)
+
   // The peer for which the dropdown menu is currently expanded. Null if no menu is expanded
   var expandedMenuPeer: StateFlow<Tailcfg.Node?> = MutableStateFlow(null)
 
   var pingViewModel: PingViewModel = PingViewModel()
 
+  // Self-contained controller for the Taildrop in-app banner/list sheet.
+  val pendingTaildrop: PendingTaildropViewModel = PendingTaildropViewModel()
+
   val isVpnPrepared: StateFlow<Boolean> = appViewModel.vpnPrepared
 
   val isVpnActive: StateFlow<Boolean> = appViewModel.vpnActive
 
-  var searchJob: Job? = null
+  private var searchJob: Job? = null
 
   // Icon displayed in the button to present the health view
   val healthIcon: StateFlow<Int?> = MutableStateFlow(null)
@@ -143,8 +168,20 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     expandedMenuPeer.set(null)
   }
 
-  fun copyIpAddress(peer: Tailcfg.Node, clipboardManager: ClipboardManager) {
+  fun copyIPV4Address(peer: Tailcfg.Node, clipboardManager: ClipboardManager) {
     clipboardManager.setText(AnnotatedString(peer.primaryIPv4Address ?: ""))
+  }
+
+  fun copyIPV6Address(peer: Tailcfg.Node, clipboardManager: ClipboardManager) {
+    clipboardManager.setText(AnnotatedString(peer.primaryIPv6Address ?: ""))
+  }
+
+  fun copyMagicDNSAddress(peer: Tailcfg.Node, clipboardManager: ClipboardManager) {
+    clipboardManager.setText(AnnotatedString(peer.magicDNSAddress ?: ""))
+  }
+
+  fun togglePin(peer: Tailcfg.Node) {
+    favoritesManager.toggleDevice(peer.StableID)
   }
 
   fun startPing(peer: Tailcfg.Node) {
@@ -163,6 +200,8 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
   }
 
   private val peerCategorizer = PeerCategorizer()
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private val categorizerDispatcher = Dispatchers.Default.limitedParallelism(1)
 
   init {
     viewModelScope.launch {
@@ -185,27 +224,73 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
             previousState = currentState
           }
     }
+
     viewModelScope.launch {
-      _searchTerm.debounce(250L).collect { term ->
+      _searchTerm.debounce(250L.milliseconds).collect { term ->
         // run the search as a background task
         searchJob?.cancel()
         searchJob =
-            launch(Dispatchers.Default) {
+            launch(categorizerDispatcher) {
               val filteredPeers = peerCategorizer.groupedAndFilteredPeers(term)
               _searchViewPeers.value = filteredPeers
             }
       }
     }
+
+    // handle grouping
     viewModelScope.launch {
       var observedProfileGeneration = appViewModel.awgProfileGeneration
       appViewModel.awgProfileGenerationState.collect { profileGeneration ->
         if (profileGeneration != observedProfileGeneration) {
           observedProfileGeneration = profileGeneration
           invalidateAwgPeerProfileCache()
-          if (appViewModel.awgProfileSyncReady.value &&
-              appViewModel.awgProfileMutationInProgress.value == null) {
+          if (
+              appViewModel.awgProfileSyncReady.value &&
+                  appViewModel.awgProfileMutationInProgress.value == null
+          ) {
             resumeAwgDiscoveryFromCurrentNetmap()
           }
+        }
+      }
+    }
+
+    viewModelScope.launch {
+      Notifier.netmap.filterNotNull().collectLatest { netmap ->
+        searchJob?.cancel()
+        withContext(categorizerDispatcher) {
+          peerCategorizer.regenerateGroupedPeers(netmap)
+          val filteredPeers = peerCategorizer.groupedAndFilteredPeers(searchTerm.value)
+          _groupedPeers.value = peerCategorizer.peerSets
+          _searchViewPeers.value = filteredPeers
+        }
+      }
+    }
+
+    // transform with favorites
+    viewModelScope.launch {
+      combine(_groupedPeers, favorites) { sets, favs -> sets to favs }
+          .collectLatest { (sets, favs) ->
+            withContext(categorizerDispatcher) {
+              _peers.value = sets.withPinnedSection(favs?.deviceIds.orEmpty())
+            }
+          }
+    }
+
+    // Key expiry
+    viewModelScope.launch {
+      Notifier.netmap.filterNotNull().collect { netmap ->
+        if (netmap.SelfNode.keyDoesNotExpire) {
+          showExpiry.set(false)
+        } else {
+          val expiryNotificationWindowMDM = MDMSettings.keyExpirationNotice.flow.value.value
+          val window =
+              expiryNotificationWindowMDM?.let { TimeUtil.duration(it) } ?: Duration.ofHours(24)
+          showExpiry.set(
+              TimeUtil.isWithinExpiryNotificationWindow(
+                  window,
+                  netmap.SelfNode.KeyExpiry ?: "",
+              )
+          )
         }
       }
     }
@@ -231,29 +316,13 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
         }
         awgProfileIdentity = newProfileIdentity
 
-        searchJob?.cancel()
-        launch(Dispatchers.Default) {
-          peerCategorizer.regenerateGroupedPeers(netmap)
-          val filteredPeers = peerCategorizer.groupedAndFilteredPeers(searchTerm.value)
-          _peers.value = peerCategorizer.peerSets
-          _searchViewPeers.value = filteredPeers
-        }
-        if (appViewModel.awgProfileSyncReady.value &&
-            appViewModel.awgProfileMutationInProgress.value == null) {
+        if (
+            appViewModel.awgProfileSyncReady.value &&
+                appViewModel.awgProfileMutationInProgress.value == null
+        ) {
           refreshAwgPeerTopology(netmap)
         } else {
           awgTopologyAvailable = false
-        }
-        if (netmap.SelfNode.keyDoesNotExpire) {
-          showExpiry.set(false)
-          return@collect
-        } else {
-          val expiryNotificationWindowMDM = MDMSettings.keyExpirationNotice.flow.value.value
-          val window =
-              expiryNotificationWindowMDM?.let { TimeUtil.duration(it) } ?: Duration.ofHours(24)
-          val expiresSoon =
-              TimeUtil.isWithinExpiryNotificationWindow(window, netmap.SelfNode.KeyExpiry ?: "")
-          showExpiry.set(expiresSoon)
         }
       }
     }
@@ -285,23 +354,23 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     }
 
     viewModelScope.launch {
-      isToggleInProgress.value = true
+      _isToggleInProgress.value = true
       try {
         val currentState = Notifier.state.value
 
         if (desiredState) {
           // User wants to turn ON the VPN
           when {
-            currentState != Ipn.State.Running -> showVPNPermissionLauncherIfUnauthorized()
+            currentState != State.Running -> showVPNPermissionLauncherIfUnauthorized()
           }
         } else {
           // User wants to turn OFF the VPN
-          if (currentState == Ipn.State.Running) {
+          if (currentState == State.Running) {
             stopVPN()
           }
         }
       } finally {
-        isToggleInProgress.value = false
+        _isToggleInProgress.value = false
       }
     }
   }
@@ -319,9 +388,11 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
   }
 
   fun loadAwgPeersStatus(feedback: AwgRefreshFeedback = AwgRefreshFeedback.SILENT) {
-    if (!awgTopologyAvailable ||
-        !appViewModel.awgProfileSyncReady.value ||
-        appViewModel.awgProfileMutationInProgress.value != null) {
+    if (
+        !awgTopologyAvailable ||
+            !appViewModel.awgProfileSyncReady.value ||
+            appViewModel.awgProfileMutationInProgress.value != null
+    ) {
       return
     }
     if (feedback == AwgRefreshFeedback.USER_REQUESTED) {
@@ -412,8 +483,10 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
 
   private fun resumeAwgDiscoveryFromCurrentNetmap() {
     val netmap = Notifier.netmap.value ?: return
-    if (!appViewModel.awgProfileSyncReady.value ||
-        appViewModel.awgProfileMutationInProgress.value != null) {
+    if (
+        !appViewModel.awgProfileSyncReady.value ||
+            appViewModel.awgProfileMutationInProgress.value != null
+    ) {
       return
     }
     refreshAwgPeerTopology(netmap)
@@ -422,8 +495,10 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
   private fun refreshAwgPeerTopology(netmap: Netmap.NetworkMap) {
     awgTopologyAvailable = true
     val newFingerprint = awgPeerFingerprint(netmap)
-    if (newFingerprint != awgPeerFingerprint ||
-        awgPeersProfileGeneration != appViewModel.awgProfileGeneration) {
+    if (
+        newFingerprint != awgPeerFingerprint ||
+            awgPeersProfileGeneration != appViewModel.awgProfileGeneration
+    ) {
       awgPeerFingerprint = newFingerprint
       awgRetryJob?.cancel()
       awgRetryJob = null
@@ -437,19 +512,20 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     if (awgSilentRetryAttempt >= AWG_REFRESH_RETRY_DELAYS_MILLIS.size) return
     val expectedFingerprint = awgPeerFingerprint
     val retryDelay = AWG_REFRESH_RETRY_DELAYS_MILLIS[awgSilentRetryAttempt++]
-    awgRetryJob =
-        viewModelScope.launch {
-          delay(retryDelay)
-          if (expectedFingerprint == awgPeerFingerprint && appViewModel.awgProfileSyncReady.value) {
-            awgRetryJob = null
-            loadAwgPeersStatus(AwgRefreshFeedback.SILENT)
-          }
-        }
+    awgRetryJob = viewModelScope.launch {
+      delay(retryDelay)
+      if (expectedFingerprint == awgPeerFingerprint && appViewModel.awgProfileSyncReady.value) {
+        awgRetryJob = null
+        loadAwgPeersStatus(AwgRefreshFeedback.SILENT)
+      }
+    }
   }
 
   fun loadLocalAwgStatus() {
-    if (!appViewModel.awgProfileSyncReady.value ||
-        appViewModel.awgProfileMutationInProgress.value != null) {
+    if (
+        !appViewModel.awgProfileSyncReady.value ||
+            appViewModel.awgProfileMutationInProgress.value != null
+    ) {
       return
     }
     val client = Client(viewModelScope)
@@ -457,9 +533,11 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     val prefsReadToken = appViewModel.beginAwgPrefsRead(AwgPrefsReader.MAIN)
     TSLog.d("MainViewModel", "Loading local AWG configuration status")
     client.getLocalPrefs { result ->
-      if (!awgTopologyAvailable ||
-          topologyGeneration != awgTopologyGeneration ||
-          !appViewModel.isCurrentAwgPrefsRead(prefsReadToken)) {
+      if (
+          !awgTopologyAvailable ||
+              topologyGeneration != awgTopologyGeneration ||
+              !appViewModel.isCurrentAwgPrefsRead(prefsReadToken)
+      ) {
         return@getLocalPrefs
       }
       result
@@ -489,12 +567,14 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
       _awgStatusMessage.value = "AWG peer $hostname is no longer in the current network map"
       return
     }
-    if (!canUseAwgPeerCache(
-        cacheProfileGeneration = awgPeersProfileGeneration,
-        currentProfileGeneration = appViewModel.awgProfileGeneration,
-        profileReady = appViewModel.awgProfileSyncReady.value,
-        selectedPeerIsCurrent = true,
-    )) {
+    if (
+        !canUseAwgPeerCache(
+            cacheProfileGeneration = awgPeersProfileGeneration,
+            currentProfileGeneration = appViewModel.awgProfileGeneration,
+            profileReady = appViewModel.awgProfileSyncReady.value,
+            selectedPeerIsCurrent = true,
+        )
+    ) {
       _awgStatusMessage.value = "AWG status for $hostname is stale; refresh and retry"
       return
     }
@@ -523,11 +603,13 @@ class MainViewModel(private val appViewModel: AppViewModel) : IpnViewModel() {
     }
     Client(appViewModel.viewModelScope).awgSyncApply(fullNodeKey, timeout) { result ->
       val appliedConfig = result.getOrNull()
-      if (!appViewModel.finishAwgWrite(
-          operation = writeOperation,
-          writeSucceeded = result.isSuccess,
-          localAwgConfiguredOnSuccess = appliedConfig?.hasNonDefaultValues() == true,
-      )) {
+      if (
+          !appViewModel.finishAwgWrite(
+              operation = writeOperation,
+              writeSucceeded = result.isSuccess,
+              localAwgConfiguredOnSuccess = appliedConfig?.hasNonDefaultValues() == true,
+          )
+      ) {
         return@awgSyncApply
       }
       if (!viewModelScope.isActive) return@awgSyncApply
@@ -637,9 +719,10 @@ internal fun awgPeerFingerprint(netmap: Netmap.NetworkMap): String {
           .filter { it.Online == true }
           .map {
             listOf(it.Key, it.primaryIPv4Address, it.Name, it.ComputedName).joinToString(
-                "\u0000") { value ->
-                  value.orEmpty()
-                }
+                "\u0000"
+            ) { value ->
+              value.orEmpty()
+            }
           }
           .sorted()
           .joinToString("\u0001")
@@ -682,33 +765,30 @@ private fun peerKeyCandidates(value: String): List<String> {
       .distinct()
 }
 
-internal fun peerKeyCandidates(peer: Tailcfg.Node): List<String> =
-    buildList {
-          add(peer.Key)
-          peer.primaryIPv4Address?.let(::add)
-          addAll(peerKeyCandidates(peer.Hostinfo.Hostname ?: peer.ComputedName ?: peer.Name))
-          addAll(peerKeyCandidates(peer.Name))
-        }
-        .filter(String::isNotEmpty)
-        .distinct()
+internal fun peerKeyCandidates(peer: Tailcfg.Node): List<String> = buildList {
+  add(peer.Key)
+  peer.primaryIPv4Address?.let(::add)
+  addAll(peerKeyCandidates(peer.Hostinfo.Hostname ?: peer.ComputedName ?: peer.Name))
+  addAll(peerKeyCandidates(peer.Name))
+}
+    .filter(String::isNotEmpty)
+    .distinct()
 
-private fun legacyPeerKeyCandidates(peer: Tailcfg.Node): List<String> =
-    buildList {
-          peer.primaryIPv4Address?.let(::add)
-          addAll(peerKeyCandidates(peer.Hostinfo.Hostname ?: peer.ComputedName ?: peer.Name))
-          addAll(peerKeyCandidates(peer.Name))
-        }
-        .filter(String::isNotEmpty)
-        .distinct()
+private fun legacyPeerKeyCandidates(peer: Tailcfg.Node): List<String> = buildList {
+  peer.primaryIPv4Address?.let(::add)
+  addAll(peerKeyCandidates(peer.Hostinfo.Hostname ?: peer.ComputedName ?: peer.Name))
+  addAll(peerKeyCandidates(peer.Name))
+}
+    .filter(String::isNotEmpty)
+    .distinct()
 
-internal fun resultKeyCandidates(peer: AwgPeerResult): List<String> =
-    buildList {
-          add(peer.nodeKey)
-          peer.tailscaleIP?.let(::add)
-          addAll(peerKeyCandidates(peer.hostname))
-        }
-        .filter(String::isNotEmpty)
-        .distinct()
+internal fun resultKeyCandidates(peer: AwgPeerResult): List<String> = buildList {
+  add(peer.nodeKey)
+  peer.tailscaleIP?.let(::add)
+  addAll(peerKeyCandidates(peer.hostname))
+}
+    .filter(String::isNotEmpty)
+    .distinct()
 
 /**
  * Indexes a fresh discovery result while retaining a previously confirmed AWG configuration when

@@ -417,6 +417,7 @@ func (a *App) newBackend(dataDir string, appCtx AppContext, store *stateStore,
 		TransportSource:   transportSource,
 		TransportRevision: transportRevision,
 		TransportManaged:  true,
+		ExtraRootCAs:      sys.ExtraRootCAs,
 	})
 	if err != nil {
 		return b, fmt.Errorf("runBackend: NewUserspaceEngine: %v", err)

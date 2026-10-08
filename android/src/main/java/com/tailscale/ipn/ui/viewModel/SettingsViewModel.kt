@@ -104,7 +104,9 @@ class SettingsViewModel : IpnViewModel() {
   fun refreshTransportStatus() {
     Client(viewModelScope).packetTransportStatus { result ->
       result.onSuccess { status -> _transportStatus.value = status }
-      result.exceptionOrNull()?.let { TSLog.e("SettingsViewModel", "Failed to read packet transport: ${it.message}") }
+      result.exceptionOrNull()?.let {
+        TSLog.e("SettingsViewModel", "Failed to read packet transport: ${it.message}")
+      }
     }
   }
 
@@ -122,19 +124,21 @@ class SettingsViewModel : IpnViewModel() {
     Client(appViewModel.viewModelScope).setPacketTransport(mode, revision) { result ->
       val active = result.getOrNull()
       val verified = active?.isActive(expected) == true
-      val currentAccount = appViewModel.finishAwgWrite(
-          operation = operation,
-          writeSucceeded = verified,
-          localAwgConfiguredOnSuccess = active?.awgConfigured ?: false,
-      )
+      val currentAccount =
+          appViewModel.finishAwgWrite(
+              operation = operation,
+              writeSucceeded = verified,
+              localAwgConfiguredOnSuccess = active?.awgConfigured ?: false,
+          )
       _isChangingTransport.value = false
       if (currentAccount) {
         active?.let { _transportStatus.value = it }
-        _awgRefreshMessage.value = if (verified) {
-          if (enabled) "QUIC is active" else "Native WG/AWG is active"
-        } else {
-          "Mode change failed: ${result.exceptionOrNull()?.message ?: "the selected engine is not active"}"
-        }
+        _awgRefreshMessage.value =
+            if (verified) {
+              if (enabled) "QUIC is active" else "Native WG/AWG is active"
+            } else {
+              "Mode change failed: ${result.exceptionOrNull()?.message ?: "the selected engine is not active"}"
+            }
       }
       refreshTransportStatus()
     }

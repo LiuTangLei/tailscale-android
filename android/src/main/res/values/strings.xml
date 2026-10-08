@@ -13,7 +13,7 @@
     <string name="not_connected">Not connected</string>
     <string name="empty" translatable="false"> </string>
     <string name="template" translatable="false">%s</string>
-    <string name="selected">Selected</string> 
+    <string name="selected">Selected</string>
     <string name="offline">Offline</string>
     <string name="ok">OK</string>
     <string name="_continue">Continue</string>
@@ -38,7 +38,7 @@
     <string name="acknowledgements">Acknowledgements</string>
     <string name="privacy_policy">Privacy Policy</string>
     <string name="terms_of_service">Terms of Service</string>
-    <string name="about_view_footnotes">WireGuard is a registered trademark of Jason A. Donenfeld.\n\n© 2024 Tailscale Inc. All rights reserved.\nTailscale is a registered trademark of Tailscale Inc.</string>
+    <string name="about_view_footnotes">WireGuard is a registered trademark of Jason A. Donenfeld.\n\n© Tailscale Inc. All rights reserved.\nTailscale is a registered trademark of Tailscale Inc.</string>
     <string name="managed_by">Managed by</string>
 
     <!-- Strings for the bug reporting screen -->
@@ -73,6 +73,8 @@
     <string name="deviceKeyNeverExpires">Device key does not expire</string>
     <string name="deviceKeyExpires">Device key expires %s</string>
     <string name="deviceKeyExpired">Device key expired %s</string>
+    <string name="key_expiry_notification_title">Tailscale sign-in expires soon</string>
+    <string name="key_expiry_notification_body">Reauthenticate to keep this device connected to your tailnet.</string>
     <string name="machine_auth_required">Admin approval required</string>
     <string name="machine_auth_explainer">This device must be approved by an administrator before it can connect to the tailnet.</string>
     <string name="open_admin_console">Open admin console</string>
@@ -139,16 +141,10 @@
     <string name="delete_tailnet">Delete tailnet</string>
     <string name="contact_support">Contact support</string>
     <string name="request_deletion_nonowner">All requests related to the removal or deletion of data are handled by our Support team. To open a request, tap the Contact Support button below to be taken to our contact form in the browser. Complete the form, and a Customer Support Engineer will work with you directly to assist.</string>
-    <string name="request_deletion_owner_part1">
-    As the owner of this tailnet, to remove yourself from the tailnet you can either reassign ownership and contact our Support team, or delete the whole tailnet through the admin console. To do the latter, go to
-</string>
-<string name="request_deletion_owner_part2a">
-    and look for “Delete tailnet”.
-</string>
+    <string name="request_deletion_owner_part1">As the owner of this tailnet, to remove yourself from the tailnet you can either reassign ownership and contact our Support team, or delete the whole tailnet through the admin console. To do the latter, go to</string>
+    <string name="request_deletion_owner_part2a">and look for “Delete tailnet”.</string>
 
-<string name="request_deletion_owner_part2b">
-    All requests related to the removal or deletion of data are handled by our Support team. To open a request, tap the Contact Support button below to be taken to our contact form in the browser. Complete the form, and a Customer Support Engineer will work with you directly to assist.
-</string>
+    <string name="request_deletion_owner_part2b">All requests related to the removal or deletion of data are handled by our Support team. To open a request, tap the Contact Support button below to be taken to our contact form in the browser. Complete the form, and a Customer Support Engineer will work with you directly to assist.</string>
 
     <!-- Strings for ExitNode picker -->
     <string name="choose_exit_node">Choose exit node</string>
@@ -259,6 +255,8 @@
     <string name="file_count">%1$s files</string>
     <string name="connect_to_your_tailnet_to_share_files">Connect to your tailnet to share files.</string>
     <string name="my_devices">My devices</string>
+    <string name="taildrop_recently_used">Recently used</string>
+    <string name="taildrop_all_devices">All devices</string>
     <string name="no_devices_to_share_with">There are no devices on your tailnet to share to</string>
     <string name="taildrop_share_failed">Taildrop failed. Some files were not shared. Please try again.</string>
     <string name="taildrop_sending">Sending</string>
@@ -301,6 +299,8 @@
     <string name="notifications_delivered_when_a_file_is_received_using_taildrop">Notifications delivered when a file is received using Taildrop.</string>
     <string name="health_channel_name">Errors and warnings</string>
     <string name="health_channel_description">This notification category is used to deliver important status notifications and should be left enabled. For instance, it is used to notify you about errors or warnings that affect Internet connectivity.</string>
+    <string name="key_expiry_channel_name">Key expiry</string>
+    <string name="key_expiry_channel_description">Notifications when your Tailscale device key is about to expire.</string>
     <string name="copy_ip_address">Copy IP Address</string>
     <string name="ping">Ping</string>
     <string name="relayed_connection">Relayed connection (%1$s)</string>
@@ -376,8 +376,31 @@
     <string name="taildrop_directory_picker_info">What is taildrop?</string>
     <string name="taildrop_directory_picker_button">Open Directory Picker</string>
 
+    <!-- Strings for Taildrop receive notifications and in-app banner/sheet -->
+    <string name="taildrop_link_received">Taildrop link received</string>
+    <string name="taildrop_text_received">Taildrop text received</string>
+    <string name="taildrop_file_received">Taildrop file received</string>
+    <string name="taildrop_tap_to_open">Tap to open</string>
+    <string name="taildrop_tap_to_copy">Tap to copy</string>
+    <string name="taildrop_saved_in_directory">Saved in Taildrop directory</string>
+    <string name="taildrop_received_sheet_title">Received via Taildrop</string>
+    <string name="taildrop_pending_count">Received %1$d Taildrop items</string>
+    <string name="taildrop_copied_to_clipboard">Copied to clipboard</string>
+    <string name="taildrop_done">Done</string>
+    <string name="taildrop_dismiss">Dismiss</string>
+    <string name="taildrop_open_folder">Open Taildrop folder</string>
+
     <!-- Strings for Hardware Attestation MDM setting -->
     <string name="enable_hardware_attestation">Enable hardware attestation</string>
     <string name="use_hardware_backed_keys_to_bind_node_identity_to_the_device">Use hardware-backed keys to bind node identity to the device</string>
 
+    <!-- Strings for Pinned Favorites -->
+    <string name="pinned_devices">Pinned Devices</string>
+
+    <!-- Strings for device dropdown menu -->
+    <string name="pin_device">Pin device</string>
+    <string name="unpin_device">Unpin device</string>
+    <string name="copy_magic_dns_address">Copy MagicDNS hostname</string>
+    <string name="copy_ipv4_address">Copy IPv4</string>
+    <string name="copy_ipv6_address">Copy IPv6</string>
 </resources>

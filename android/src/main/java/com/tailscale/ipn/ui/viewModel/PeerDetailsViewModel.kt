@@ -6,8 +6,10 @@ package com.tailscale.ipn.ui.viewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.tailscale.ipn.App
 import com.tailscale.ipn.ui.localapi.Client
 import com.tailscale.ipn.ui.model.AwgPeerResult
+import com.tailscale.ipn.ui.model.Favorites
 import com.tailscale.ipn.ui.model.StableNodeID
 import com.tailscale.ipn.ui.model.Tailcfg
 import com.tailscale.ipn.ui.notifier.Notifier
@@ -25,7 +27,7 @@ data class PeerSettingInfo(val titleRes: Int, val value: ComposableStringFormatt
 class PeerDetailsViewModelFactory(
     private val nodeId: StableNodeID,
     private val filesDir: File,
-    private val pingViewModel: PingViewModel
+    private val pingViewModel: PingViewModel,
 ) : ViewModelProvider.Factory {
   @Suppress("UNCHECKED_CAST")
   override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -36,7 +38,7 @@ class PeerDetailsViewModelFactory(
 class PeerDetailsViewModel(
     val nodeId: StableNodeID,
     val filesDir: File,
-    val pingViewModel: PingViewModel
+    val pingViewModel: PingViewModel,
 ) : IpnViewModel() {
   val node: StateFlow<Tailcfg.Node?> = MutableStateFlow(null)
   val isPinging: StateFlow<Boolean> = MutableStateFlow(false)
@@ -69,12 +71,14 @@ class PeerDetailsViewModel(
     loadedAwgOnline = peer.Online
     val requestGeneration = ++awgLookupGeneration
     Client(viewModelScope).awgSyncPeers { result ->
-      if (!isCurrentAwgPeerLookup(
-          requestGeneration,
-          awgLookupGeneration,
-          peer.Key,
-          node.value?.Key,
-      )) {
+      if (
+          !isCurrentAwgPeerLookup(
+              requestGeneration,
+              awgLookupGeneration,
+              peer.Key,
+              node.value?.Key,
+          )
+      ) {
         return@awgSyncPeers
       }
       result
@@ -135,15 +139,18 @@ class PeerDetailsViewModel(
       return
     }
     val retryDelay = AWG_DETAILS_RETRY_DELAYS_MILLIS[awgRetryAttempt++]
-    awgRetryJob =
-        viewModelScope.launch {
-          delay(retryDelay)
-          awgRetryJob = null
-          node.value
-              ?.takeIf { it.Key == peerKey && it.Online == true }
-              ?.let { loadAwgConfigForPeer(it, force = true) }
-        }
+    awgRetryJob = viewModelScope.launch {
+      delay(retryDelay)
+      awgRetryJob = null
+      node.value
+          ?.takeIf { it.Key == peerKey && it.Online == true }
+          ?.let { loadAwgConfigForPeer(it, force = true) }
+    }
   }
+
+  private val favoritesManager = App.get().favoritesManager
+  val favorites: StateFlow<Favorites?> = favoritesManager.favorites
+  val isWritingFavorites: StateFlow<Boolean> = favoritesManager.writing
 
   init {
     viewModelScope.launch {
@@ -177,6 +184,10 @@ class PeerDetailsViewModel(
   fun onPingDismissal() {
     isPinging.set(false)
     this.pingViewModel.handleDismissal()
+  }
+
+  fun togglePin() {
+    node.value?.let { favoritesManager.toggleDevice(it.StableID) }
   }
 }
 

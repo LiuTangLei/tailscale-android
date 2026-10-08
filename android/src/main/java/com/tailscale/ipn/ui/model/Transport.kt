@@ -38,7 +38,8 @@ data class TransportStatus(
     @SerialName("awg_configured") val awgConfigured: Boolean = false,
     @SerialName("warnings") val warnings: List<String> = emptyList(),
     @SerialName("mixed_peer_support") val mixedPeerSupport: Boolean = false,
-    @SerialName("unconfigured_peers") val unconfiguredPeers: List<TransportUnconfiguredPeer> = emptyList(),
+    @SerialName("unconfigured_peers")
+    val unconfiguredPeers: List<TransportUnconfiguredPeer> = emptyList(),
 ) {
   fun isActive(expectedMode: String): Boolean =
       !pendingRestart && activeMode == expectedMode && desiredMode == expectedMode

@@ -16,6 +16,8 @@ import com.tailscale.ipn.ui.model.Ipn
 import com.tailscale.ipn.ui.util.set
 import com.tailscale.ipn.util.TSLog
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.debounce
@@ -24,6 +26,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class HealthNotifier(
     healthStateFlow: StateFlow<Health.State?>,
     ipnStateFlow: StateFlow<Ipn.State>,
@@ -41,7 +44,15 @@ class HealthNotifier(
 
           // Ignored on Android because we already have a dedicated connected/not connected
           // notification
-          "wantrunning-false")
+          "wantrunning-false",
+      )
+
+  // These must be initialized before the init block below, which launches a coroutine that can
+  // immediately call dropAllWarnings() (reading currentWarnings) on a background dispatcher. If
+  // the collector observes the initial non-Running ipn state before these property initializers
+  // run, it would read a null StateFlow and crash with an NPE (see startup init-order race).
+  val currentWarnings: StateFlow<Set<UnhealthyState>> = MutableStateFlow(setOf())
+  val currentIcon: StateFlow<Int?> = MutableStateFlow(null)
 
   init {
     // This roughly matches the iOS/macOS implementation in terms of debouncing, and ignoring
@@ -67,9 +78,6 @@ class HealthNotifier(
           }
     }
   }
-
-  val currentWarnings: StateFlow<Set<UnhealthyState>> = MutableStateFlow(setOf())
-  val currentIcon: StateFlow<Int?> = MutableStateFlow(null)
 
   private fun notifyHealthUpdated(warnings: Array<UnhealthyState>) {
     val warningsBeforeAdd = currentWarnings.value
@@ -140,9 +148,11 @@ class HealthNotifier(
       this.currentIcon.set(null)
       return
     }
-    if (currentWarnings.value.any {
-      (it.Severity == Health.Severity.high || it.ImpactsConnectivity == true)
-    }) {
+    if (
+        currentWarnings.value.any {
+          (it.Severity == Health.Severity.high || it.ImpactsConnectivity == true)
+        }
+    ) {
       this.currentIcon.set(R.drawable.warning_rounded)
     } else {
       this.currentIcon.set(R.drawable.info)
@@ -159,9 +169,12 @@ class HealthNotifier(
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
-    if (ActivityCompat.checkSelfPermission(
-        App.get().applicationContext, Manifest.permission.POST_NOTIFICATIONS) !=
-        PackageManager.PERMISSION_GRANTED) {
+    if (
+        ActivityCompat.checkSelfPermission(
+            App.get().applicationContext,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) != PackageManager.PERMISSION_GRANTED
+    ) {
       TSLog.d(TAG, "Notification permission not granted")
       return
     }

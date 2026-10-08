@@ -18,7 +18,8 @@ class AwgConfigTest {
   fun historicalV2LowercaseAndScalarHeadersDecode() {
     val config =
         json.decodeFromString<AmneziaWGPrefs>(
-            """{"s1":10,"s2":15,"s3":8,"s4":0,"h1":100000,"h2":"300000-350000","i1":"<b 0xc0><r 32>"}""")
+            """{"s1":10,"s2":15,"s3":8,"s4":0,"h1":100000,"h2":"300000-350000","i1":"<b 0xc0><r 32>"}"""
+        )
 
     assertEquals(MagicHeaderRange(100000, 100000), config.H1)
     assertEquals(MagicHeaderRange(300000, 350000), config.H2)
@@ -39,7 +40,8 @@ class AwgConfigTest {
   fun inheritedV2RangeProfileRemainsValid() {
     val config =
         json.decodeFromString<AmneziaWGPrefs>(
-            """{"jc":1,"jmin":64,"jmax":128,"s1":2,"s2":2,"s3":1,"s4":2,"h1":{"min":437103616,"max":804436808},"h2":{"min":1385444482,"max":1808425148},"h3":{"min":2603510117,"max":3050208882},"h4":{"min":3291575908,"max":3724355998}}""")
+            """{"jc":1,"jmin":64,"jmax":128,"s1":2,"s2":2,"s3":1,"s4":2,"h1":{"min":437103616,"max":804436808},"h2":{"min":1385444482,"max":1808425148},"h3":{"min":2603510117,"max":3050208882},"h4":{"min":3291575908,"max":3724355998}}"""
+        )
 
     assertEquals("AWG v2", config.versionLabel())
     assertNull(config.validationError())
@@ -63,7 +65,8 @@ class AwgConfigTest {
               "reject_after_time":{"min":180,"max":240},
               "keepalive_timeout":{"min":10,"max":15},
               "max_handshake_attempts":{"min":8,"max":12}
-            }""")
+            }"""
+        )
 
     assertTrue(config.isV3())
     assertEquals("AWG v3", config.versionLabel())
@@ -129,7 +132,8 @@ class AwgConfigTest {
                 nodeKey = "nodekey:test",
                 hostname = "peer",
                 config = AmneziaWGPrefs(JC = 1),
-            ))
+            )
+        )
 
     assertNull(awgRefreshMessage(peers, AwgRefreshFeedback.SILENT))
   }

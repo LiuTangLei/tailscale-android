@@ -23,8 +23,14 @@ class TransportTest {
 
   @Test
   fun requestKeepsRevisionAndDoesNotContainPrivateIdentity() {
-    val payload = Json.encodeToString(
-        TransportControlRequest(action = "mode", expectedRevision = "test-revision", mode = "quic"))
+    val payload =
+        Json.encodeToString(
+            TransportControlRequest(
+                action = "mode",
+                expectedRevision = "test-revision",
+                mode = "quic",
+            )
+        )
     assertTrue(payload.contains("\"expected_revision\":\"test-revision\""))
     assertTrue(payload.contains("\"mode\":\"quic\""))
     assertFalse(payload.contains("private_key"))

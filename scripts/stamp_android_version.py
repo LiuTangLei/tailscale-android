@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Print Android build stamps from the exact published replacement module.
-
-A corrected same-name release must not stamp the old cached Git tag object as
-its core source. This build uses an immutable pseudo-version and checks its
-module origin before deriving the displayed and embedded version strings.
-"""
+"""Print Android build stamps from the checksum-verified published fork module."""
 from __future__ import annotations
 import json
 import os
@@ -12,8 +7,8 @@ import shlex
 import subprocess
 
 CORE = "github.com/LiuTangLei/tailscale"
-VERSION = "v1.102.5-0.20260916181858-1f00235ed2ce"
-COMMIT = "1f00235ed2ceaa2231755a2d2d3677c2d42438c6"
+VERSION = "v1.104.1"
+COMMIT = "411ee6685253069b5a3b496ab14c98e5b2f82afb"
 
 def command(*argv: str) -> str:
     return subprocess.check_output(argv, text=True, env={**os.environ, "GOWORK": "off"}).strip()
@@ -25,9 +20,9 @@ if replacement.get("Path") != CORE or replacement.get("Version") != VERSION or n
 source = command("git", "rev-parse", "HEAD")
 dirty = bool(command("git", "status", "--porcelain"))
 extra = source + ("-dirty" if dirty else "")
-long_version = "1.102.4-t" + COMMIT[:9] + "-g" + source[:9] + ("-dirty" if dirty else "")
+long_version = "1.104.1-t" + COMMIT[:9] + "-g" + source[:9] + ("-dirty" if dirty else "")
 values = {
-    "VERSION_SHORT": "1.102.4",
+    "VERSION_SHORT": "1.104.1",
     "VERSION_LONG": long_version,
     "VERSION_GIT_HASH": COMMIT,
     "VERSION_EXTRA_HASH": extra,

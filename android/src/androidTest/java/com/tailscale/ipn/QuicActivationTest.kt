@@ -6,26 +6,34 @@ package com.tailscale.ipn
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.tailscale.ipn.ui.util.InputStreamAdapter
+import java.io.ByteArrayOutputStream
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.security.MessageDigest
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.io.ByteArrayOutputStream
-import java.net.InetSocketAddress
-import java.net.Socket
-import java.security.MessageDigest
 
 /** Runs only on an explicitly selected, isolated emulator with local fake control. */
 @RunWith(AndroidJUnit4::class)
 class QuicActivationTest {
-  private fun call(method: String, endpoint: String, body: JSONObject? = null, timeoutMillis: Long = 60_000L): JSONObject {
+  private fun call(
+      method: String,
+      endpoint: String,
+      body: JSONObject? = null,
+      timeoutMillis: Long = 60_000L,
+  ): JSONObject {
     val app = App.get().getLibtailscaleApp()
-    val response = app.callLocalAPI(
-        timeoutMillis, method, "/localapi/v0/$endpoint",
-        body?.toString()?.byteInputStream()?.let { InputStreamAdapter(it) },
-    )
+    val response =
+        app.callLocalAPI(
+            timeoutMillis,
+            method,
+            "/localapi/v0/$endpoint",
+            body?.toString()?.byteInputStream()?.let { InputStreamAdapter(it) },
+        )
     val bytes = response.bodyBytes() ?: ByteArray(0)
     check(response.statusCode() in 200..299) {
       "LocalAPI $endpoint failed (${response.statusCode()}): ${bytes.decodeToString()}"
@@ -39,7 +47,8 @@ class QuicActivationTest {
       val status = call("GET", "packet-transport")
       val key = status.optString("local_public_key")
       if (key.isNotEmpty()) {
-        if (expected != null) assertEquals("node identity must survive engine restart", expected, key)
+        if (expected != null)
+            assertEquals("node identity must survive engine restart", expected, key)
         return status
       }
       Thread.sleep(100)
@@ -57,8 +66,10 @@ class QuicActivationTest {
       socket.soTimeout = 10_000
       socket.connect(InetSocketAddress(peerIP, 18080), 5_000)
       val method = if (upload == null) "GET" else "POST"
-      val header = "$method /payload?size=262144 HTTP/1.0\r\nHost: $peerIP\r\nConnection: close\r\n" +
-          (upload?.let { "Content-Length: ${it.size}\r\n" } ?: "") + "\r\n"
+      val header =
+          "$method /payload?size=262144 HTTP/1.0\r\nHost: $peerIP\r\nConnection: close\r\n" +
+              (upload?.let { "Content-Length: ${it.size}\r\n" } ?: "") +
+              "\r\n"
       socket.getOutputStream().write(header.toByteArray(Charsets.US_ASCII))
       if (upload != null) socket.getOutputStream().write(upload)
       socket.getOutputStream().flush()
@@ -84,9 +95,10 @@ class QuicActivationTest {
   private fun verifyKernelPayload(peerIP: String) {
     val payload = kernelRequest(peerIP)
     assertEquals("kernel VPN download length", 262144, payload.size)
-    val sha256 = MessageDigest.getInstance("SHA-256").digest(payload).joinToString("") {
-      "%02x".format(it.toInt() and 0xff)
-    }
+    val sha256 =
+        MessageDigest.getInstance("SHA-256").digest(payload).joinToString("") {
+          "%02x".format(it.toInt() and 0xff)
+        }
     val result = JSONObject(kernelRequest(peerIP, payload).decodeToString())
     assertEquals("kernel VPN upload length", payload.size, result.getInt("bytes"))
     assertEquals("kernel VPN upload checksum", sha256, result.getString("sha256"))
@@ -95,14 +107,29 @@ class QuicActivationTest {
   @Test
   fun actualEngineReconstructsAcrossQuicAndAwg() {
     val args = InstrumentationRegistry.getArguments()
-    val control = args.getString("quicControlURL") ?: error("explicit local control URL is required")
-    require(control.startsWith("http://127.0.0.1:")) { "this test must not use a real control server" }
-    require(android.os.Build.FINGERPRINT.contains("generic") || android.os.Build.MODEL.contains("sdk")) {
+    val control =
+        args.getString("quicControlURL") ?: error("explicit local control URL is required")
+    require(control.startsWith("http://127.0.0.1:")) {
+      "this test must not use a real control server"
+    }
+    require(
+        android.os.Build.FINGERPRINT.contains("generic") || android.os.Build.MODEL.contains("sdk")
+    ) {
       "this test is only for an isolated emulator, never a physical phone"
     }
-    call("POST", "start", JSONObject()
-        .put("UpdatePrefs", JSONObject().put("ControlURL", control).put("WantRunning", true).put("CorpDNS", false))
-        .put("AuthKey", "isolated-mobile-test"))
+    call(
+        "POST",
+        "start",
+        JSONObject()
+            .put(
+                "UpdatePrefs",
+                JSONObject()
+                    .put("ControlURL", control)
+                    .put("WantRunning", true)
+                    .put("CorpDNS", false),
+            )
+            .put("AuthKey", "isolated-mobile-test"),
+    )
     call("POST", "login-interactive")
     val identity = awaitIdentity().getString("local_public_key")
     val kernelVPN = args.getString("quicKernelVPN") == "true"
@@ -116,7 +143,9 @@ class QuicActivationTest {
       val before = call("GET", "packet-transport")
       val request = JSONObject().put("expected_revision", before.getString("revision"))
       if (mode == "awg") {
-        request.put("action", "awg").put("awg", JSONObject().put("jc", 4).put("jmin", 64).put("jmax", 128))
+        request
+            .put("action", "awg")
+            .put("awg", JSONObject().put("jc", 4).put("jmin", 64).put("jmax", 128))
       } else {
         request.put("action", "mode").put("mode", "quic")
       }
@@ -131,14 +160,16 @@ class QuicActivationTest {
         assertEquals(4, call("GET", "prefs").getJSONObject("AmneziaWG").getInt("JC"))
       } else {
         assertTrue(call("GET", "prefs").getJSONObject("AmneziaWG").optInt("JC", 0) == 0)
-        val peerIP = args.getString("quicPeerIP") ?: error("an isolated desktop QUIC peer is required")
+        val peerIP =
+            args.getString("quicPeerIP") ?: error("an isolated desktop QUIC peer is required")
         require(peerIP.startsWith("100.64."))
         var verified = false
         repeat(3) {
           if (!verified) {
             try {
               val ping = call("POST", "ping?ip=$peerIP&type=TSMP", timeoutMillis = 5_000L)
-              verified = ping.optString("Err").isEmpty() && ping.optDouble("LatencySeconds", 0.0) > 0
+              verified =
+                  ping.optString("Err").isEmpty() && ping.optDouble("LatencySeconds", 0.0) > 0
             } catch (_: Exception) {
               Thread.sleep(100)
             }

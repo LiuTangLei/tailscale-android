@@ -14,11 +14,14 @@ import com.tailscale.ipn.ui.model.Netmap
 import com.tailscale.ipn.ui.model.NodeID
 import com.tailscale.ipn.ui.model.Tailcfg
 import com.tailscale.ipn.ui.util.set
+import com.tailscale.ipn.util.InlineShareInboxStore
+import com.tailscale.ipn.util.PendingInlineShare
 import com.tailscale.ipn.util.TSLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
@@ -57,6 +60,22 @@ object Notifier {
   val incomingFiles: StateFlow<List<Ipn.PartialFile>?> = MutableStateFlow(null)
   val filesWaiting: StateFlow<Empty.Message?> = MutableStateFlow(null)
 
+  // Seeded from disk so pending shares survive process death, e.g. if the app is killed
+  // in the background before the user acts on a share that couldn't be surfaced as a
+  // notification because POST_NOTIFICATIONS was denied.
+  private val _inlineShareInbox = MutableStateFlow(InlineShareInboxStore.load())
+  val inlineShareInbox: StateFlow<List<PendingInlineShare>> = _inlineShareInbox
+
+  fun appendInlineShare(p: PendingInlineShare) {
+    _inlineShareInbox.update { it + p }
+    InlineShareInboxStore.save(_inlineShareInbox.value)
+  }
+
+  fun removeInlineShare(id: String) {
+    _inlineShareInbox.update { list -> list.filterNot { it.id == id } }
+    InlineShareInboxStore.save(_inlineShareInbox.value)
+  }
+
   private val userProfiles = mutableMapOf<String, Tailcfg.UserProfile>()
 
   private lateinit var app: libtailscale.Application
@@ -86,44 +105,45 @@ object Notifier {
       manager =
           app.watchNotifications(mask.toLong()) { notification ->
             runCatching {
-                  val notify = decoder.decodeFromStream<Notify>(notification.inputStream())
-                  notify.State?.let { state.set(Ipn.State.fromInt(it)) }
-                  if (BuildConfig.DEBUG) {
-                    notify.InitialStatus?.let {
-                      TSLog.d(
-                          TAG,
-                          "received initial status: peers=${it.Peer?.size ?: 0}, users=${it.User?.size ?: 0}")
-                    }
-                    val peersChanged = notify.PeersChanged?.size ?: 0
-                    val peersRemoved = notify.PeersRemoved?.size ?: 0
-                    val users = notify.UserProfiles?.size ?: 0
-                    if (notify.SelfChange != null ||
-                        peersChanged > 0 ||
-                        peersRemoved > 0 ||
-                        users > 0) {
-                      TSLog.d(
-                          TAG,
-                          "received bus update: self=${notify.SelfChange != null}, peersChanged=$peersChanged, peersRemoved=$peersRemoved, users=$users")
-                    }
-                  }
-                  updateNetworkMap(notify)
-                  notify.Prefs?.let(prefs::set)
-                  notify.Engine?.let(engineStatus::set)
-                  notify.TailFSShares?.let(tailFSShares::set)
-                  notify.BrowseToURL?.let(browseToURL::set)
-                  notify.LoginFinished?.let { loginFinished.set(it.property) }
-                  notify.Version?.let(version::set)
-                  notify.OutgoingFiles?.let(outgoingFiles::set)
-                  notify.FilesWaiting?.let(filesWaiting::set)
-                  notify.IncomingFiles?.let(incomingFiles::set)
-                  notify.Health?.let {
-                    if (INJECT_FAKE_HEALTH_WARNINGS) {
-                      injectFakeHealthState()
-                    } else {
-                      health.set(it)
-                    }
-                  }
+              val notify = decoder.decodeFromStream<Notify>(notification.inputStream())
+              notify.State?.let { state.set(Ipn.State.fromInt(it)) }
+              if (BuildConfig.DEBUG) {
+                notify.InitialStatus?.let {
+                  TSLog.d(
+                      TAG,
+                      "received initial status: peers=${it.Peer?.size ?: 0}, users=${it.User?.size ?: 0}",
+                  )
                 }
+                val peersChanged = notify.PeersChanged?.size ?: 0
+                val peersRemoved = notify.PeersRemoved?.size ?: 0
+                val users = notify.UserProfiles?.size ?: 0
+                if (
+                    notify.SelfChange != null || peersChanged > 0 || peersRemoved > 0 || users > 0
+                ) {
+                  TSLog.d(
+                      TAG,
+                      "received bus update: self=${notify.SelfChange != null}, peersChanged=$peersChanged, peersRemoved=$peersRemoved, users=$users",
+                  )
+                }
+              }
+              updateNetworkMap(notify)
+              notify.Prefs?.let(prefs::set)
+              notify.Engine?.let(engineStatus::set)
+              notify.TailFSShares?.let(tailFSShares::set)
+              notify.BrowseToURL?.let(browseToURL::set)
+              notify.LoginFinished?.let { loginFinished.set(it.property) }
+              notify.Version?.let(version::set)
+              notify.OutgoingFiles?.let(outgoingFiles::set)
+              notify.FilesWaiting?.let(filesWaiting::set)
+              notify.IncomingFiles?.let(incomingFiles::set)
+              notify.Health?.let {
+                if (INJECT_FAKE_HEALTH_WARNINGS) {
+                  injectFakeHealthState()
+                } else {
+                  health.set(it)
+                }
+              }
+            }
                 .onFailure { TSLog.e(TAG, "failed to process IPN notification", it) }
           }
     }
@@ -190,7 +210,8 @@ object Notifier {
       if (BuildConfig.DEBUG) {
         TSLog.d(
             TAG,
-            "received self change for a different node; cleared peers and users before applying deltas")
+            "received self change for a different node; cleared peers and users before applying deltas",
+        )
       }
     }
 
@@ -201,7 +222,8 @@ object Notifier {
       next =
           next.copy(
               SelfNode = self.withDisplayNames(next.magicDNSSuffix()),
-              AllCaps = self.capabilities())
+              AllCaps = self.capabilities(),
+          )
     }
     val removed = notify.PeersRemoved
     if (!removed.isNullOrEmpty()) {
@@ -213,6 +235,45 @@ object Notifier {
       val suffix = next.magicDNSSuffix()
       next = next.copy(Peers = mergePeers(next.Peers, changed.map { it.withDisplayNames(suffix) }))
     }
+
+    val peers = next.Peers.orEmpty()
+    val duplicateStableIDs = peers.groupBy { it.StableID }.filterValues { it.size > 1 }
+    val duplicateNodeIDs = peers.groupBy { it.ID }.filterValues { it.size > 1 }
+    val selfInPeersByStableID = peers.any { it.StableID == next.SelfNode.StableID }
+    val selfInPeersByNodeID = peers.any { it.ID == next.SelfNode.ID }
+
+    check(
+        duplicateStableIDs.isEmpty() &&
+            duplicateNodeIDs.isEmpty() &&
+            !selfInPeersByStableID &&
+            !selfInPeersByNodeID
+    ) {
+      buildString {
+        append("Invalid Notifier netmap")
+        append("; sourceInitial=${initial != null}")
+        append("; hadSelfChange=${self != null}")
+        append("; peersChanged=${changed?.size ?: 0}")
+        append("; peersRemoved=${removed?.size ?: 0}")
+        append("; peers=${peers.size}")
+        append("; selfNodeID=${next.SelfNode.ID}")
+        append("; selfStableID=${next.SelfNode.StableID}")
+        append("; duplicateStableIDs=${duplicateStableIDs.keys}")
+        append("; duplicateNodeIDs=${duplicateNodeIDs.keys}")
+        append("; selfInPeersByStableID=$selfInPeersByStableID")
+        append("; selfInPeersByNodeID=$selfInPeersByNodeID")
+        if (duplicateStableIDs.isNotEmpty()) {
+          append("; entries=")
+          append(
+              duplicateStableIDs.entries.joinToString("|") { (stableID, nodes) ->
+                "$stableID=[" +
+                    nodes.joinToString(",") { node -> "nodeID=${node.ID}/user=${node.User}" } +
+                    "]"
+              }
+          )
+        }
+      }
+    }
+
     if (next != cur) {
       _netmap.set(next)
     }
@@ -220,14 +281,15 @@ object Notifier {
       if (BuildConfig.DEBUG) {
         TSLog.d(
             TAG,
-            "updated network map from initial status: peers=${next.Peers?.size ?: 0}, users=${next.UserProfiles.size}, selfUser=${next.SelfNode.User}")
+            "updated network map from initial status: peers=${next.Peers?.size ?: 0}, users=${next.UserProfiles.size}, selfUser=${next.SelfNode.User}",
+        )
       }
     }
   }
 
   private fun mergePeers(
       peers: List<Tailcfg.Node>?,
-      changed: List<Tailcfg.Node>
+      changed: List<Tailcfg.Node>,
   ): List<Tailcfg.Node> {
     val byID = linkedMapOf<NodeID, Tailcfg.Node>()
     peers.orEmpty().forEach { byID[it.ID] = it }
@@ -246,7 +308,8 @@ object Notifier {
         UserProfiles = profiles,
         TKAEnabled = false,
         DNS = null,
-        AllCaps = self.capabilities())
+        AllCaps = self.capabilities(),
+    )
   }
 
   private fun Tailcfg.Node.capabilities() = CapMap?.keys?.toList() ?: Capabilities.orEmpty()
@@ -261,7 +324,8 @@ object Notifier {
         UserProfiles = emptyMap(),
         TKAEnabled = false,
         DNS = null,
-        AllCaps = self.capabilities())
+        AllCaps = self.capabilities(),
+    )
   }
 
   private fun IpnState.PeerStatus.toNode(status: IpnState.Status): Tailcfg.Node {
@@ -294,13 +358,18 @@ object Notifier {
         AllowedIPs = allowedIPs,
         Hostinfo =
             Tailcfg.Hostinfo(
-                OS = OS, Hostname = HostName, ShareeNode = ShareeNode, Location = Location),
+                OS = OS,
+                Hostname = HostName,
+                ShareeNode = ShareeNode,
+                Location = Location,
+            ),
         LastSeen = LastSeen,
         Online = Online,
         Capabilities = Capabilities,
         CapMap = CapMap,
         ComputedName = computedName,
-        ComputedNameWithHost = computedNameWithHost)
+        ComputedNameWithHost = computedNameWithHost,
+    )
   }
 
   private fun IpnState.PeerStatus.displayName(status: IpnState.Status): String {
@@ -317,9 +386,11 @@ object Notifier {
     if (SelfNode.ID != 0L && self.ID != 0L && SelfNode.ID != self.ID) {
       return false
     }
-    if (SelfNode.StableID.isNotEmpty() &&
-        self.StableID.isNotEmpty() &&
-        SelfNode.StableID != self.StableID) {
+    if (
+        SelfNode.StableID.isNotEmpty() &&
+            self.StableID.isNotEmpty() &&
+            SelfNode.StableID != self.StableID
+    ) {
       return false
     }
     if (SelfNode.User != 0L && self.User != 0L && SelfNode.User != self.User) {

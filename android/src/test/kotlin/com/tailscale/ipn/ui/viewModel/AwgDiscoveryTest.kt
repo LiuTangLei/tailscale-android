@@ -113,7 +113,8 @@ class AwgDiscoveryTest {
                     nodeKey = "nodekey:offline",
                     hostname = "offline",
                     config = configured,
-                )),
+                )
+            ),
         )
 
     val merged = mergeAwgPeerResults(previous.data, emptyList())
@@ -294,14 +295,18 @@ class AwgDiscoveryTest {
         )
 
     assertTrue(
-        isCurrentAwgRefresh(request, 4, "same", topologyAvailable = true, profileGeneration = 9))
+        isCurrentAwgRefresh(request, 4, "same", topologyAvailable = true, profileGeneration = 9)
+    )
     assertFalse(
-        isCurrentAwgRefresh(request, 5, "same", topologyAvailable = true, profileGeneration = 9))
+        isCurrentAwgRefresh(request, 5, "same", topologyAvailable = true, profileGeneration = 9)
+    )
     assertFalse(
-        isCurrentAwgRefresh(request, 4, "same", topologyAvailable = false, profileGeneration = 9))
+        isCurrentAwgRefresh(request, 4, "same", topologyAvailable = false, profileGeneration = 9)
+    )
     // A delayed response from profile A must not update profile B even if topology matches.
     assertFalse(
-        isCurrentAwgRefresh(request, 4, "same", topologyAvailable = true, profileGeneration = 10))
+        isCurrentAwgRefresh(request, 4, "same", topologyAvailable = true, profileGeneration = 10)
+    )
   }
 
   @Test
@@ -320,14 +325,16 @@ class AwgDiscoveryTest {
             mutationSucceeded = true,
             currentProfileBoundaryEpoch = 12,
             hasCurrentNetmap = true,
-        ))
+        )
+    )
     assertFalse(
         canUseAwgPeerCache(
             cacheProfileGeneration = mutation.profileGeneration,
             currentProfileGeneration = mutation.profileGeneration,
             profileReady = false,
             selectedPeerIsCurrent = true,
-        ))
+        )
+    )
     assertTrue(
         awgProfileReadyAfterMutation(
             mutation,
@@ -335,7 +342,8 @@ class AwgDiscoveryTest {
             mutationSucceeded = true,
             currentProfileBoundaryEpoch = 13,
             hasCurrentNetmap = true,
-        ))
+        )
+    )
     assertTrue(
         awgProfileReadyAfterMutation(
             mutation,
@@ -343,7 +351,8 @@ class AwgDiscoveryTest {
             mutationSucceeded = false,
             currentProfileBoundaryEpoch = 12,
             hasCurrentNetmap = true,
-        ))
+        )
+    )
   }
 
   @Test
@@ -380,7 +389,8 @@ class AwgDiscoveryTest {
         findAwgPeerResult(
             peer,
             listOf(AwgPeerResult(nodeKey = "nodekey:other", hostname = "peer")),
-        ))
+        )
+    )
   }
 
   @Test

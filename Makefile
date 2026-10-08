@@ -10,14 +10,14 @@
 # with this name, it will be used.
 #
 # The convention here is tailscale-android-build-amd64-<date>
-DOCKER_IMAGE := tailscale-android-build-amd64-072226-3
+DOCKER_IMAGE := tailscale-android-build-amd64-20260912-1
 
 # The integration test image contains the Android emulator, system image, SDK,
 # build-tools, NDK, adb, and helper tools needed to run the emulator-backed Go
 # integration tests. Bump this tag when docker/Dockerfile.android-integration
 # or the required tool versions change, using:
 # tailscale-android-integration-amd64-YYYYMMDD-N
-ANDROID_INTEGRATION_DOCKER_IMAGE := tailscale-android-integration-amd64-20260609-1
+ANDROID_INTEGRATION_DOCKER_IMAGE := tailscale-android-integration-amd64-20260912-1
 export TS_USE_TOOLCHAIN=1
 # Release builds must resolve dependencies from this repository's go.mod. An inherited go.work
 # can otherwise replace the pinned Tailscale or wireguard-go modules without changing this tree.
@@ -44,6 +44,15 @@ RELEASE_AAB := tailscale-release.aab
 RELEASE_TV_AAB := tailscale-tv-release.aab
 JKS_ALIAS ?= tailscale
 JKS_KEY_PASSWORD ?= $(JKS_PASSWORD)
+
+# Base Android versionCode for this make invocation. The value is minutes since
+# the Unix epoch, times 10; the final digit is reserved for the platform
+# (0 = phone/tablet, 1 = Android TV). An explicitly supplied value wins so the
+# outer builder can keep phone and TV on the same base.
+ifndef VERSION_CODE_BASE
+VERSION_CODE_BASE := $(shell echo $$(( $$(date +%s) / 60 * 10 )))
+endif
+export VERSION_CODE_BASE
 
 # Define output filenames.
 LIBTAILSCALE_AAR := android/libs/libtailscale.aar
@@ -187,35 +196,30 @@ gradle-dependencies: check-java $(shell find android -type f -not -path "android
 
 $(RELEASE_AAB): version gradle-dependencies
 	@echo "Building release AAB"
-	(cd android && ./gradlew test bundleRelease -PdisableReleaseSigning=true)
+	(cd android && ./gradlew test bundleRelease -PVERSION_CODE_BASE=$(VERSION_CODE_BASE))
 	install -C ./android/build/outputs/bundle/release/android-release.aab $@
 
-# PLATFORM=tv signals to gradle that we should build for AndroidTV. The stamped
-# versionCode reserves its last digit for the variant: phone/tablet builds end
-# in 0 and TV builds end in 1, so the two are distinguishable in the Play Store.
-# build.gradle keeps a bare integer literal (external tooling greps it), so we
-# add the +1 here: temporarily increment the versionCode in android/build.gradle
-# for the duration of the build, then restore the original value via a shell trap
-# so the working tree is left clean even if the gradle build fails.
+# PLATFORM=tv signals to Gradle that we should build for AndroidTV. Gradle
+# reserves the last digit of VERSION_CODE_BASE for the platform, so phone/tablet
+# builds use ...0 and TV builds use ...1.
 $(RELEASE_TV_AAB): version gradle-dependencies
 	@echo "Building TV release AAB"
-	@set -e; \
-		ORIG_VC=$$(grep -oE 'versionCode [0-9]+' android/build.gradle | awk '{print $$2}'); \
-		TV_VC=$$((ORIG_VC + 1)); \
-		echo "TV versionCode: $$ORIG_VC -> $$TV_VC"; \
-		trap "sed -i.bak -E 's/versionCode [0-9]+/versionCode $$ORIG_VC/' android/build.gradle && rm -f android/build.gradle.bak" EXIT INT TERM HUP; \
-		sed -i.bak -E "s/versionCode [0-9]+/versionCode $$TV_VC/" android/build.gradle; \
-		rm -f android/build.gradle.bak; \
-		(cd android && ./gradlew test bundleRelease -PPLATFORM=tv -PdisableReleaseSigning=true)
+	(cd android && ./gradlew test bundleRelease -PVERSION_CODE_BASE=$(VERSION_CODE_BASE) -PPLATFORM=tv)
 	install -C ./android/build/outputs/bundle/release/android-release.aab $@
 
 tailscale-test.apk: version gradle-dependencies
-	(cd android && ./gradlew assembleApplicationTestAndroidTest)
-	install -C ./android/build/outputs/apk/androidTest/applicationTest/android-applicationTest-androidTest.apk $@
+	(cd android && ./gradlew assembleDebugAndroidTest)
+	install -C ./android/build/outputs/apk/androidTest/debug/android-debug-androidTest.apk $@
+
+# Command that (re)generates tailscale.version from the current git HEAD and
+# go.mod state. VERSION_LONG's trailing -g<hash> is this repo's HEAD, so this
+# must be re-run after any commit that should be reflected in the version (see
+# tag_release / bumposs).
+MKVERSION := ./tool/go run tailscale.com/cmd/mkversion
 
 .PHONY: tailscale.version
 tailscale.version: go.mod go.sum go.toolchain.rev scripts/stamp_android_version.py
-	@GOFLAGS='-mod=readonly' python3 scripts/stamp_android_version.py > tailscale.version
+	@GOFLAGS='$(GOFLAGS) -mod=readonly' python3 scripts/stamp_android_version.py > tailscale.version
 
 .PHONY: version
 version: tailscale.version
@@ -232,10 +236,10 @@ $(GOBIN):
 	mkdir -p $(GOBIN)
 
 $(GOBIN)/gomobile: $(GOBIN)/gobind go.mod go.sum go.toolchain.rev | $(GOBIN)
-	GOFLAGS='-mod=readonly' ./tool/go install golang.org/x/mobile/cmd/gomobile
+	GOFLAGS='$(GOFLAGS) -mod=readonly' ./tool/go install golang.org/x/mobile/cmd/gomobile
 
 $(GOBIN)/gobind: go.mod go.sum go.toolchain.rev
-	GOFLAGS='-mod=readonly' ./tool/go install golang.org/x/mobile/cmd/gobind
+	GOFLAGS='$(GOFLAGS) -mod=readonly' ./tool/go install golang.org/x/mobile/cmd/gobind
 
 .PHONY: build-unstripped-aar
 build-unstripped-aar: check-java tailscale.version $(GOBIN)/gomobile
@@ -245,7 +249,7 @@ build-unstripped-aar: check-java tailscale.version $(GOBIN)/gomobile
 	rm -f $(ABS_UNSTRIPPED_AAR)
 	# The -linkmode=external -extldflags=-Wl,-z,max-page-size=16384 is specific to NDK 23
 	# to support 16kb page sizes.  Your mileage may vary with other NDK versions.
-	GOFLAGS='-mod=readonly' $(GOBIN)/gomobile bind -target android -androidapi 26 \
+	GOFLAGS='$(GOFLAGS) -mod=readonly' $(GOBIN)/gomobile bind -target android -androidapi 26 \
 		-tags "$$(./build-tags.sh) $(GOMOBILE_BUILD_TAGS)" \
 		-ldflags "-linkmode=external -extldflags=-Wl,-z,max-page-size=16384 $$(./version-ldflags.sh)" \
 		-o $(ABS_UNSTRIPPED_AAR) ./libtailscale || { echo "gomobile bind failed"; exit 1; }
@@ -321,10 +325,10 @@ check-java:
 .PHONY: jarsign-env
 jarsign-env:
 ifeq ($(JKS_PATH),)
-	$(error JKS_PATH is not set.  export JKS_PATH=/path/to/tailcale.jks)
+	$(error JKS_PATH is not set.  export JKS_PATH=/path/to/tailscale.jks)
 endif
 ifeq ($(JKS_PASSWORD),)
-	$(error JKS_PASSWORD is not set.  export JKS_PASSWORD=passwordForTailcale.jks)
+	$(error JKS_PASSWORD is not set.  export JKS_PASSWORD=passwordForTailscale.jks)
 endif
 ifeq ($(wildcard $(JKS_PATH)),)
 	$(error JKS_PATH does not point to a file)
@@ -338,43 +342,33 @@ androidpath:
 	@echo 'export PATH=$(ANDROID_HOME)/cmdline-tools/latest/bin:$(ANDROID_HOME)/platform-tools:$$PATH'
 
 .PHONY: tag_release
-tag_release: tailscale.version bump-version-code ## Tag the current commit with the current version
-	@if ! git diff --quiet -- android/build.gradle; then \
-		source tailscale.version && git commit -sm "android: bump versionCode for $${VERSION_LONG}" android/build.gradle; \
-	fi
-	source tailscale.version && git tag -a "$${VERSION_LONG}" -m "Version updated to $${VERSION_LONG}"
-
-.PHONY: bumposs ## Bump to the latest oss and update the versions.
-bumposs: update-oss tailscale.version bump-version-code
-	source tailscale.version && git commit -sm "android: bump OSS" -m "OSS and Version updated to $${VERSION_LONG}" go.toolchain.rev android/build.gradle go.mod go.sum
+tag_release: tailscale.version ## Tag the current commit with the current version
 	source tailscale.version && git tag -a "$${VERSION_LONG}" -m "OSS and Version updated to $${VERSION_LONG}"
 
-# Stamps android/build.gradle's versionCode from wall-clock time: minutes since
-# the Unix epoch, times 10. Time is a global, monotonically increasing authority,
-# so releases cut from different branches never collide or regress (see the
-# versionCode comment in android/build.gradle). The last digit is reserved for
-# the build variant; the AndroidTV build adds 1 at build time. If the machine
-# clock would produce a value not strictly greater than the current one (clock
-# skew, or two bumps within the same minute), fall back to bumping the current
-# value by 10 so the code always advances.
-.PHONY: bump-version-code
-bump-version-code:
-	@CUR_VERSION_CODE=$$(grep -oE 'versionCode [0-9]+' android/build.gradle | awk '{print $$2}') && \
-		TIME_VERSION_CODE=$$(( $$(date +%s) / 60 * 10 )) && \
-		if [ "$$TIME_VERSION_CODE" -gt "$$CUR_VERSION_CODE" ]; then \
-			NEXT_VERSION_CODE=$$TIME_VERSION_CODE; \
-		else \
-			NEXT_VERSION_CODE=$$((CUR_VERSION_CODE + 10)); \
-		fi && \
-		echo "Setting android/build.gradle versionCode $$CUR_VERSION_CODE -> $$NEXT_VERSION_CODE" && \
-		sed -i.bak -E "s/versionCode [0-9]+/versionCode $$NEXT_VERSION_CODE/" android/build.gradle && \
-		rm android/build.gradle.bak
+.PHONY: bumposs ## Bump to the latest oss and update the versions.
+bumposs: update-oss tailscale.version
+	source tailscale.version && git commit -sm "android: bump OSS" -m "OSS and Version updated to $${VERSION_LONG}" go.toolchain.rev go.mod go.sum
+	@# Regenerate tailscale.version so VERSION_LONG's -g<hash> points at the
+	@# bump commit we just created, not its parent.
+	$(MKVERSION) > tailscale.version
+	source tailscale.version && git tag -a "$${VERSION_LONG}" -m "OSS and Version updated to $${VERSION_LONG}"
 
 .PHONY: update-oss ## Update the tailscale.com go module
 update-oss:
 	curl -f https://raw.githubusercontent.com/tailscale/tailscale/refs/heads/main/go.toolchain.rev > go.toolchain.rev.new
 	mv go.toolchain.rev.new go.toolchain.rev
-	GOPROXY=direct ./tool/go get tailscale.com@main
+# Resolve main to a commit ourselves rather than asking the Go module
+# proxy for tailscale.com@main, because the proxy caches branch
+# resolution and often returns a stale commit. With an explicit commit
+# the proxy fetches it on demand, so both tailscale.com and all of its
+# dependencies come from the proxy rather than slow direct git clones.
+# If the proxy fails for some reason, fall back to fetching just
+# tailscale.com directly while still using the proxy for everything else.
+	REV=$$(git ls-remote https://github.com/tailscale/tailscale.git refs/heads/main | cut -f1) && \
+		test -n "$$REV" && \
+		echo "Updating tailscale.com to $$REV" && \
+		(./tool/go get tailscale.com@$$REV || \
+			GONOPROXY=tailscale.com ./tool/go get tailscale.com@$$REV)
 	./tool/go mod tidy -compat=1.24
 
 # Get the commandline tools package, this provides (among other things) the sdkmanager binary.
@@ -412,6 +406,10 @@ go-test: ## Run the Go tests (excludes packages requiring Android NDK)
 .PHONY: test
 test: gradle-dependencies ## Run the Android tests
 	(cd android && ./gradlew test)
+
+.PHONY: release-lint
+release-lint: gradle-dependencies ## Run release lint checks
+	(cd android && ./gradlew --no-daemon lintVitalRelease)
 
 .PHONY: fmt
 fmt: gradle-dependencies ## Format the Android code
@@ -484,7 +482,7 @@ DOCKER_RUN_VOLS := -v $(CURDIR):/build/tailscale-android -v $(DOCKER_ANDROID_DIR
 
 .PHONY: docker-run-build
 docker-run-build: clean jarsign-env docker-build-image docker-android-dir ## Runs the docker image for the android build environment and builds release
-	@docker run --rm $(DOCKER_RUN_VOLS) --env JKS_PASSWORD=$(JKS_PASSWORD) --env JKS_PATH=$(JKS_PATH) $(DOCKER_IMAGE)
+	@docker run --rm $(DOCKER_RUN_VOLS) --env JKS_PASSWORD=$(JKS_PASSWORD) --env JKS_PATH=$(JKS_PATH) --env VERSION_CODE_BASE=$(VERSION_CODE_BASE) $(DOCKER_IMAGE)
 
 .PHONY: docker-tailscale-debug
 docker-tailscale-debug: docker-build-image docker-android-dir ## Build tailscale-debug.apk inside the docker env (stable signer across runs)
@@ -544,7 +542,7 @@ release-signed: jarsign-env libtailscale version gradle-dependencies ## Build a 
 		TAILSCALE_ANDROID_KEYSTORE_PASSWORD="$(JKS_PASSWORD)" \
 		TAILSCALE_ANDROID_KEY_ALIAS="$(JKS_ALIAS)" \
 		TAILSCALE_ANDROID_KEY_PASSWORD="$(JKS_KEY_PASSWORD)" \
-		./gradlew test assembleRelease
+		./gradlew test assembleRelease --max-workers=2 -Dorg.gradle.jvmargs=-Xmx2g --no-daemon
 	install -C ./android/build/outputs/apk/release/android-release.apk tailscale-release-signed.apk
 	@echo "Signed release APK saved as tailscale-release-signed.apk"
 

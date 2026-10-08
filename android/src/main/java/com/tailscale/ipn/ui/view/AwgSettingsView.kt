@@ -64,30 +64,34 @@ fun AwgSettingsView(
   Scaffold(
       topBar = {
         Header(
-            title = { Text(title, style = MaterialTheme.typography.titleLarge) }, onBack = onBack)
-      }) { innerPadding ->
-        Column(
-            modifier =
-                Modifier.padding(innerPadding)
-                    .verticalScroll(rememberScrollState())
-                    .padding(bottom = 16.dp)) {
-              CurrentConfigStatus(currentConfig)
-              Lists.SectionDivider()
-              if (mode == "json") {
-                JsonConfig(viewModel, isLoading)
-              } else {
-                ManualConfig(viewModel, isLoading, generatedProfileVersion)
-              }
-              Lists.SectionDivider()
-              OutlinedButton(
-                  onClick = viewModel::clearFields,
-                  enabled = !isLoading,
-                  modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-              ) {
-                Text("Clear input fields")
-              }
-            }
+            title = { Text(title, style = MaterialTheme.typography.titleLarge) },
+            onBack = onBack,
+        )
       }
+  ) { innerPadding ->
+    Column(
+        modifier =
+            Modifier.padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 16.dp)
+    ) {
+      CurrentConfigStatus(currentConfig)
+      Lists.SectionDivider()
+      if (mode == "json") {
+        JsonConfig(viewModel, isLoading)
+      } else {
+        ManualConfig(viewModel, isLoading, generatedProfileVersion)
+      }
+      Lists.SectionDivider()
+      OutlinedButton(
+          onClick = viewModel::clearFields,
+          enabled = !isLoading,
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+      ) {
+        Text("Clear input fields")
+      }
+    }
+  }
 }
 
 @Composable
@@ -178,25 +182,29 @@ private fun ManualConfig(
         viewModel.h1Min.collectAsState().value,
         viewModel.h1Max.collectAsState().value,
         { viewModel.h1Min.value = it },
-        { viewModel.h1Max.value = it })
+        { viewModel.h1Max.value = it },
+    )
     RangeFields(
         "H2",
         viewModel.h2Min.collectAsState().value,
         viewModel.h2Max.collectAsState().value,
         { viewModel.h2Min.value = it },
-        { viewModel.h2Max.value = it })
+        { viewModel.h2Max.value = it },
+    )
     RangeFields(
         "H3",
         viewModel.h3Min.collectAsState().value,
         viewModel.h3Max.collectAsState().value,
         { viewModel.h3Min.value = it },
-        { viewModel.h3Max.value = it })
+        { viewModel.h3Max.value = it },
+    )
     RangeFields(
         "H4",
         viewModel.h4Min.collectAsState().value,
         viewModel.h4Max.collectAsState().value,
         { viewModel.h4Min.value = it },
-        { viewModel.h4Max.value = it })
+        { viewModel.h4Max.value = it },
+    )
 
     Spacer(Modifier.height(8.dp))
     Lists.LargeTitle("AWG v3 parameters")
@@ -216,37 +224,43 @@ private fun ManualConfig(
         viewModel.contentPaddingMin.collectAsState().value,
         viewModel.contentPaddingMax.collectAsState().value,
         { viewModel.contentPaddingMin.value = it },
-        { viewModel.contentPaddingMax.value = it })
+        { viewModel.contentPaddingMax.value = it },
+    )
     RangeFields(
         "Rekey after",
         viewModel.rekeyAfterMin.collectAsState().value,
         viewModel.rekeyAfterMax.collectAsState().value,
         { viewModel.rekeyAfterMin.value = it },
-        { viewModel.rekeyAfterMax.value = it })
+        { viewModel.rekeyAfterMax.value = it },
+    )
     RangeFields(
         "Rekey timeout",
         viewModel.rekeyTimeoutMin.collectAsState().value,
         viewModel.rekeyTimeoutMax.collectAsState().value,
         { viewModel.rekeyTimeoutMin.value = it },
-        { viewModel.rekeyTimeoutMax.value = it })
+        { viewModel.rekeyTimeoutMax.value = it },
+    )
     RangeFields(
         "Reject after",
         viewModel.rejectAfterMin.collectAsState().value,
         viewModel.rejectAfterMax.collectAsState().value,
         { viewModel.rejectAfterMin.value = it },
-        { viewModel.rejectAfterMax.value = it })
+        { viewModel.rejectAfterMax.value = it },
+    )
     RangeFields(
         "Keepalive timeout",
         viewModel.keepaliveTimeoutMin.collectAsState().value,
         viewModel.keepaliveTimeoutMax.collectAsState().value,
         { viewModel.keepaliveTimeoutMin.value = it },
-        { viewModel.keepaliveTimeoutMax.value = it })
+        { viewModel.keepaliveTimeoutMax.value = it },
+    )
     RangeFields(
         "Max handshake attempts",
         viewModel.maxHandshakeAttemptsMin.collectAsState().value,
         viewModel.maxHandshakeAttemptsMax.collectAsState().value,
         { viewModel.maxHandshakeAttemptsMin.value = it },
-        { viewModel.maxHandshakeAttemptsMax.value = it })
+        { viewModel.maxHandshakeAttemptsMax.value = it },
+    )
 
     Spacer(Modifier.height(12.dp))
     ApplyButton("Apply profile", isLoading, viewModel::applyManualConfig)

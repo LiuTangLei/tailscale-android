@@ -53,7 +53,8 @@ object MagicHeaderRangeSerializer : KSerializer<MagicHeaderRange> {
         buildJsonObject {
           put("min", value.min)
           put("max", value.max)
-        })
+        }
+    )
   }
 
   private fun parseRange(element: JsonElement): MagicHeaderRange =
@@ -270,8 +271,10 @@ data class AmneziaWGPrefs(
     }
 
     val key = HeaderProtectionKey.orEmpty()
-    if (key.isNotEmpty() &&
-        (key.length != 64 || !key.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' })) {
+    if (
+        key.isNotEmpty() &&
+            (key.length != 64 || !key.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' })
+    ) {
       return "HeaderProtectionKey must contain exactly 64 hexadecimal characters"
     }
     if (key.isNotEmpty() && key != ZERO_KEY) {

@@ -89,8 +89,12 @@ class AwgSettingsViewModel : IpnViewModel() {
       result
           .onSuccess { prefs ->
             val config = prefs.AmneziaWG
-            if (!appViewModel.commitLocalAwgStatus(
-                prefsReadToken, config?.hasNonDefaultValues() == true)) {
+            if (
+                !appViewModel.commitLocalAwgStatus(
+                    prefsReadToken,
+                    config?.hasNonDefaultValues() == true,
+                )
+            ) {
               return@prefsRequest
             }
             _currentConfig.value = config
@@ -257,11 +261,13 @@ class AwgSettingsViewModel : IpnViewModel() {
     }
     val maskedPrefs = Ipn.MaskedPrefs().also { it.AmneziaWG = config }
     Client(appViewModel.viewModelScope).editPrefs(maskedPrefs) { result ->
-      if (!appViewModel.finishAwgWrite(
-          operation = writeOperation,
-          writeSucceeded = result.isSuccess,
-          localAwgConfiguredOnSuccess = config.hasNonDefaultValues(),
-      )) {
+      if (
+          !appViewModel.finishAwgWrite(
+              operation = writeOperation,
+              writeSucceeded = result.isSuccess,
+              localAwgConfiguredOnSuccess = config.hasNonDefaultValues(),
+          )
+      ) {
         return@editPrefs
       }
       if (!viewModelScope.isActive) return@editPrefs

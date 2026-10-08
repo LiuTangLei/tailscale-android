@@ -1,40 +1,28 @@
 # Tailscale Android Client — AWG / QUIC fork
 
-## 1.102.4 AWG / QUIC release
+## 1.104.1 AWG / QUIC release
 
-This fork adds **one QUIC option** to Settings while retaining native AWG v2/v3.
-Selecting a mode reconstructs the actual Android Go packet engine and verifies
-that the requested mode is running. Selecting QUIC automatically clears saved
-AWG settings; applying/syncing AWG selects native mode and activates it.
+The [v1.104.1 release](https://github.com/LiuTangLei/tailscale-android/releases/tag/v1.104.1)
+uses the official Android 1.104.1 source and the published fork core
+`github.com/LiuTangLei/tailscale v1.104.1`, wireguard-go `v0.0.34`, and
+quic-go `v0.63.0-tailscale.1.0.20260929072415-cda3ed094749`.
+The universal APK covers arm64-v8a, armeabi-v7a, x86 and x86_64, uses the
+existing production certificate, and retains the package name for in-place upgrades.
 
-QUIC is direct native IP over the authenticated QUIC/HTTP/3 carrier, not
-WireGuard-over-QUIC. Both communicating devices need compatible active modes.
-The core is pinned to corrected 1.102.4 source `1f00235ed2ce`, not a mutable tag
-cache or a local source replacement.
+AWG v2/v3 profile generation, import, peer discovery and sync are retained.
+Enabling QUIC clears the saved AWG profile after confirmation; applying AWG
+selects native mode. Both changes restart the embedded engine while preserving
+node identity. Upstream favorites, sharing and key-expiry updates are included.
 
-The [1.102.4 release](https://github.com/LiuTangLei/tailscale-android/releases/tag/v1.102.4)
-now provides **`tailscale-release-signed.apk`**, built with the original
-`make release-signed` workflow and the existing local release keystore.
-It is signed by the same certificate as this fork's v1.102.2. A direct in-place
-upgrade was tested on a disposable emulator: existing test data, installed UID
-and first-install time were preserved, and the upgraded release app launched.
-No uninstall is needed for matching-signature installations. Official Tailscale,
-other forks and the earlier development-signed APK are not covered by that claim.
-The previous test/unsigned preview downloads were superseded and removed from
-this release; v1.102.4 is now the signed stable release.
+Release assets include the exact source/dependency manifest, SHA256 sums and
+verification results. Emulator tests use an isolated local test network; they
+do not claim physical-phone carrier-network acceptance.
 
-Controlled emulator tests cover real engine restart, preserved identity,
-QUIC/AWG switching, an encrypted round trip through a private DERP to a desktop
-peer, and 256 KiB uploads/downloads over the actual Android VPN with checksums.
-They are not long-duration field validation on every phone or network.
-See [implementation, test and signing notes](docs/quic-1.102.4-work-report.md).
+Build with Go 1.27.1 and `make release-signed`. Signing credentials come only
+from the `JKS_PATH`, `JKS_PASSWORD`, `JKS_ALIAS` and `JKS_KEY_PASSWORD` environment
+variables; no private signing material is included in the repository or release.
+The following upstream distribution instructions describe the official app.
 
-The upstream distribution information below refers to official Tailscale, not
-to this fork's AWG/QUIC release packages.
-
-https://tailscale.com
-
-Private WireGuard® networks made easy
 
 ## Overview
 
@@ -164,16 +152,13 @@ make install
 
 ## Building a release
 
-Use `make tag_release` to stamp the Play Store version code, update the version
-name, and tag the current commit. The version code is derived from wall-clock
-time (minutes since the Unix epoch) at release time and committed into
-`android/build.gradle`, so it increases monotonically across all builds and
-branches while staying fixed for any given commit.
+Use `make release-signed` with the original signing environment. Set
+`VERSION_CODE_BASE` explicitly when reproducing a release; by default it is
+minutes since the Unix epoch multiplied by ten. Android TV uses the next integer.
+Keep the value higher than the last published APK to preserve update compatibility.
+The published manifest records both the exact value and the source commit.
 
-We only guarantee to support the latest Go release and any Go beta or
-release candidate builds (currently Go 1.14) in module mode. It might
-work in earlier Go versions or in GOPATH mode, but we're making no
-effort to keep those working.
+Use Go 1.27.1, Java 21, and the checked-in Gradle wrapper for this release.
 
 ## Developing on a Fire Stick TV
 

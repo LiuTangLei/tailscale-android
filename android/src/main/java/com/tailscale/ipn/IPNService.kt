@@ -5,6 +5,7 @@ package com.tailscale.ipn
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Network
 import android.net.VpnService
 import android.os.Build
 import android.system.OsConstants
@@ -38,6 +39,10 @@ open class IPNService : VpnService(), libtailscale.IPNService {
     super.onCreate()
     // grab app to make sure it initializes
     app = App.get()
+
+    NetworkChangeCallback.setUnderlyingNetworkListener { network ->
+      updateUnderlyingNetwork(network)
+    }
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
@@ -109,6 +114,7 @@ open class IPNService : VpnService(), libtailscale.IPNService {
   }
 
   override fun onDestroy() {
+    NetworkChangeCallback.setUnderlyingNetworkListener(null)
     close()
     updateVpnStatus(false)
     super.onDestroy()
@@ -128,14 +134,24 @@ open class IPNService : VpnService(), libtailscale.IPNService {
     app.getAppScopedViewModel().setVpnPrepared(isPrepared)
   }
 
+  private fun updateUnderlyingNetwork(network: Network?) {
+    val networks = network?.let { arrayOf(it) } ?: emptyArray()
+    if (!setUnderlyingNetworks(networks)) {
+      TSLog.w(TAG, "Failed to set underlying network: $network")
+    } else {
+      TSLog.d(TAG, "Set underlying network: $network")
+    }
+  }
+
   private fun showForegroundNotification(
       hideDisconnectAction: Boolean,
-      exitNodeName: String? = null
+      exitNodeName: String? = null,
   ) {
     try {
       startForeground(
           UninitializedApp.STATUS_NOTIFICATION_ID,
-          UninitializedApp.get().buildStatusNotification(true, hideDisconnectAction, exitNodeName))
+          UninitializedApp.get().buildStatusNotification(true, hideDisconnectAction, exitNodeName),
+      )
     } catch (e: Exception) {
       TSLog.e(TAG, "Failed to start foreground service: $e")
     }
@@ -152,7 +168,8 @@ open class IPNService : VpnService(), libtailscale.IPNService {
         this,
         0,
         Intent(this, MainActivity::class.java),
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
   }
 
   private fun allowApp(b: Builder, name: String) {
@@ -180,7 +197,9 @@ open class IPNService : VpnService(), libtailscale.IPNService {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       b.setMetered(false) // Inherit the metered status from the underlying networks.
     }
-    b.setUnderlyingNetworks(null) // Use all available networks.
+
+    val underlyingNetwork = NetworkChangeCallback.cachedDefaultNetwork
+    b.setUnderlyingNetworks(underlyingNetwork?.let { arrayOf(it) } ?: emptyArray())
 
     val mdmAllowed =
         MDMSettings.includedPackages.flow.value.value?.split(",")?.map { it.trim() } ?: emptyList()
@@ -209,15 +228,20 @@ open class IPNService : VpnService(), libtailscale.IPNService {
       TSLog.d(TAG, "Application packages were set by user: $packagesList")
     }
 
+    packagesList =
+        packagesForVpnBuilder(
+            packagesList = packagesList,
+            allowPackages = allowPackages,
+            tailscalePackageName = UninitializedApp.get().packageName,
+            builtInDisallowedPackages = UninitializedApp.get().builtInDisallowedPackageNames,
+        )
+
     if (allowPackages) {
       for (packageName in packagesList) {
         TSLog.d(TAG, "Including app: $packageName")
         allowApp(b, packageName)
       }
     } else {
-      // Make sure to also exclude hard-coded apps that are known to cause issues
-      packagesList += UninitializedApp.get().builtInDisallowedPackageNames
-
       for (packageName in packagesList) {
         TSLog.d(TAG, "Disallowing app: $packageName")
         disallowApp(b, packageName)
@@ -234,3 +258,19 @@ open class IPNService : VpnService(), libtailscale.IPNService {
     const val ACTION_START_FOREGROUND_ONLY = "com.tailscale.ipn.START_FOREGROUND_ONLY"
   }
 }
+
+internal fun packagesForVpnBuilder(
+    packagesList: List<String>,
+    allowPackages: Boolean,
+    tailscalePackageName: String,
+    builtInDisallowedPackages: List<String>,
+): List<String> =
+    if (allowPackages) {
+      if (packagesList.isEmpty()) {
+        emptyList()
+      } else {
+        (packagesList + tailscalePackageName).distinct()
+      }
+    } else {
+      (packagesList + builtInDisallowedPackages).distinct()
+    }

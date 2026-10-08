@@ -229,11 +229,10 @@ class AppViewModel(application: Application, private val taildropPrompt: Flow<Un
     viewModelScope.launch {
       Notifier.netmap.collect { netmap ->
         hasCurrentAwgNetmap = netmap != null
-        val identity =
-            netmap?.let {
-              listOf(it.Domain, it.SelfNode.StableID, it.SelfNode.User.toString())
-                  .joinToString("\u0000")
-            }
+        val identity = netmap?.let {
+          listOf(it.Domain, it.SelfNode.StableID, it.SelfNode.User.toString())
+              .joinToString("\u0000")
+        }
         if (!hasObservedAwgProfile || identity != observedAwgProfileIdentity) {
           awgProfileBoundaryEpoch++
           hasObservedAwgProfile = true
@@ -243,10 +242,12 @@ class AppViewModel(application: Application, private val taildropPrompt: Flow<Un
           _localAwgConfigured.value = false
         }
         val awaiting = awaitingAwgProfileNetmap
-        if (awaiting != null &&
-            awgProfileMutationInProgress.value == null &&
-            netmap != null &&
-            awgProfileBoundaryEpoch > awaiting.profileBoundaryEpochAtStart) {
+        if (
+            awaiting != null &&
+                awgProfileMutationInProgress.value == null &&
+                netmap != null &&
+                awgProfileBoundaryEpoch > awaiting.profileBoundaryEpochAtStart
+        ) {
           awaitingAwgProfileNetmap = null
           _awgProfileSyncReady.value = true
         }
@@ -292,7 +293,8 @@ class AppViewModel(application: Application, private val taildropPrompt: Flow<Un
     if (documentFile == null || !documentFile.exists() || !documentFile.canWrite()) {
       TSLog.d(
           "MainViewModel",
-          "Stored directory URI is invalid or inaccessible; launching directory picker.")
+          "Stored directory URI is invalid or inaccessible; launching directory picker.",
+      )
       viewModelScope.launch { requestDirectoryPicker() }
     } else {
       TSLog.d("MainViewModel", "Using stored directory URI: $storedUri")
