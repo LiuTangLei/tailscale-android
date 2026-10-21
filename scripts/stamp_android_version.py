@@ -7,8 +7,8 @@ import shlex
 import subprocess
 
 CORE = "github.com/LiuTangLei/tailscale"
-VERSION = "v1.104.1"
-COMMIT = "411ee6685253069b5a3b496ab14c98e5b2f82afb"
+VERSION = "v1.104.2"
+COMMIT = "d7efe75c7cce10651036bda98145e550ce0986ff"
 
 def command(*argv: str) -> str:
     return subprocess.check_output(argv, text=True, env={**os.environ, "GOWORK": "off"}).strip()
@@ -20,9 +20,9 @@ if replacement.get("Path") != CORE or replacement.get("Version") != VERSION or n
 source = command("git", "rev-parse", "HEAD")
 dirty = bool(command("git", "status", "--porcelain"))
 extra = source + ("-dirty" if dirty else "")
-long_version = "1.104.1-t" + COMMIT[:9] + "-g" + source[:9] + ("-dirty" if dirty else "")
+long_version = "1.104.2-t" + COMMIT[:9] + "-g" + source[:9] + ("-dirty" if dirty else "")
 values = {
-    "VERSION_SHORT": "1.104.1",
+    "VERSION_SHORT": "1.104.2",
     "VERSION_LONG": long_version,
     "VERSION_GIT_HASH": COMMIT,
     "VERSION_EXTRA_HASH": extra,

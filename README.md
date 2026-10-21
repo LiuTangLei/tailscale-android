@@ -1,11 +1,14 @@
 # Tailscale Android Client — AWG / QUIC fork
 
-## 1.104.1 AWG / QUIC release
+## 1.104.2 AWG / QUIC release
 
-The [v1.104.1 release](https://github.com/LiuTangLei/tailscale-android/releases/tag/v1.104.1)
-uses the official Android 1.104.1 source and the published fork core
-`github.com/LiuTangLei/tailscale v1.104.1`, wireguard-go `v0.0.34`, and
-quic-go `v0.63.0-tailscale.1.0.20260929072415-cda3ed094749`.
+The [v1.104.2 release](https://github.com/LiuTangLei/tailscale-android/releases/tag/v1.104.2)
+retains the reviewed Android 1.104.1 app base and uses the published fork core
+`github.com/LiuTangLei/tailscale v1.104.2`, wireguard-go `v0.0.34`, and
+quic-go `v0.63.0-tailscale.1.0.20261021083103-10dfe69b6d4c`.
+The QUIC pin is the same `10dfe69b6d4c` commit as the fork v0.64.1 release;
+uTLS is pinned to `7effde6a93dc`. H3 resumption and reordered DATAGRAM fixes
+match the desktop 1.104.2 release.
 The universal APK covers arm64-v8a, armeabi-v7a, x86 and x86_64, uses the
 existing production certificate, and retains the package name for in-place upgrades.
 
@@ -18,7 +21,7 @@ Release assets include the exact source/dependency manifest, SHA256 sums and
 verification results. Emulator tests use an isolated local test network; they
 do not claim physical-phone carrier-network acceptance.
 
-Build with Go 1.27.1 and `make release-signed`. Signing credentials come only
+Build with Go 1.27.3 and `make release-signed`. Signing credentials come only
 from the `JKS_PATH`, `JKS_PASSWORD`, `JKS_ALIAS` and `JKS_KEY_PASSWORD` environment
 variables; no private signing material is included in the repository or release.
 The following upstream distribution instructions describe the official app.
