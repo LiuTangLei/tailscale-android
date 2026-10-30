@@ -2,7 +2,7 @@
 
 ## 1.104.4 release
 
-[Download the universal APK](https://github.com/LiuTangLei/tailscale-android/releases/tag/v1.104.4).
+[Download the universal APK](https://github.com/LiuTangLei/tailscale-android/releases/download/v1.104.4/tailscale-release-signed.apk).
 
 Updated to Tailscale 1.104.4 with AWG v2/v3 and QUIC support. The universal APK
 supports arm64-v8a, armeabi-v7a, x86 and x86_64. Install it over the previous
@@ -17,33 +17,17 @@ through the existing signing environment variables.
 
 ## Overview
 
-This repository contains the open source Tailscale Android client.
+This fork adds AWG and QUIC support to the open source Tailscale Android client.
 
-## Using
+## Install or upgrade
 
-#### Tailscale Packages
+1. Download [the signed 1.104.4 APK](https://github.com/LiuTangLei/tailscale-android/releases/download/v1.104.4/tailscale-release-signed.apk).
+2. Open the APK on your Android device and allow installation from your browser
+   or file manager if prompted.
+3. Install over your existing fork installation to keep your settings and login.
 
-The latest stable release APK can be obtained from the [Tailscale Packages Stable Track](https://pkgs.tailscale.com/stable/#android).
-
-Unstable releases can be obtained from the [Tailscale Packages Unstable Track](https://pkgs.tailscale.com/unstable/#android).
-
-These APKs include all supported platforms and architectures.  For installing compact APKs, Android TV, or if you want automatic updates, visit the [Google Play Store](https://play.google.com/store/apps/details?id=com.tailscale.ipn).
-
-#### Google Playstore
-
-[<img src="https://play.google.com/intl/en_us/badges/images/generic/en-play-badge.png"
-     alt="Get it on Google Play"
-     height="80">](https://play.google.com/store/apps/details?id=com.tailscale.ipn)
-
-Help us test new features and bug-fixes before they ship to all users! A [beta testing track](https://play.google.com/apps/testing/com.tailscale.ipn) is available on the Play Store. 
-
-#### Amazon Appstore
-
-The app can be downloaded from the [Amazon Appstore](https://www.amazon.com/dp/B0D38TRB3N) for Amazon Fire tablets and Fire TV devices.
-
-#### F-Droid
-
-The [F-Droid](https://f-droid.org/packages/com.tailscale.ipn/) project builds the source code in this repository and maintains independently-built APKs. Note that F-Droid builds are not released, updated, or verified by the Tailscale team.
+The same APK supports arm64-v8a, armeabi-v7a, x86 and x86_64. Release details
+and checksums are on the [1.104.4 release page](https://github.com/LiuTangLei/tailscale-android/releases/tag/v1.104.4).
 
 ## Preparing a build environment
 
@@ -149,7 +133,7 @@ minutes since the Unix epoch multiplied by ten. Android TV uses the next integer
 Keep the value higher than the last published APK to preserve update compatibility.
 The published manifest records both the exact value and the source commit.
 
-Use Go 1.27.1, Java 21, and the checked-in Gradle wrapper for this release.
+Use Go 1.27.3, Java 17 or later, and the checked-in Gradle wrapper for this release.
 
 ## Developing on a Fire Stick TV
 
@@ -160,15 +144,14 @@ On the Fire Stick:
 Then some useful commands:
 ```
 adb connect 10.2.200.213:5555
-adb install -r tailscale-fdroid.apk
+adb install -r tailscale-debug.apk
 adb shell am start -n com.tailscale.ipn/com.tailscale.ipn.MainActivity
 adb shell pm uninstall com.tailscale.ipn
 ```
 
 ## Bugs
 
-Please file any issues about this code or the hosted service on
-[the tailscale issue tracker](https://github.com/tailscale/tailscale/issues).
+Please report fork issues in [this repository](https://github.com/LiuTangLei/tailscale-android/issues).
 
 ## Contributing
 
@@ -183,8 +166,6 @@ Origin](https://en.wikipedia.org/wiki/Developer_Certificate_of_Origin)
 
 ## About Us
 
-We are [Tailscale](https://tailscale.com). See
-https://tailscale.com/company for more about us and what we're
-building.
+This fork builds on the [Tailscale Android client](https://github.com/tailscale/tailscale-android).
 
 WireGuard is a registered trademark of Jason A. Donenfeld.
