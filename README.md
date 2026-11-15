@@ -1,10 +1,11 @@
 # Tailscale Android Client — AWG / QUIC fork
 
-## 1.104.4 release
+## 1.104.6 release
 
-[Download the universal APK](https://github.com/LiuTangLei/tailscale-android/releases/download/v1.104.4/tailscale-release-signed.apk).
+[Download the universal APK](https://github.com/LiuTangLei/tailscale-android/releases/download/v1.104.6/tailscale-release-signed.apk).
 
-Updated to Tailscale 1.104.4 with AWG v2/v3 and QUIC support. The universal APK
+Updated to Tailscale 1.104.6 with AWG v2/v3 and QUIC support. The core dependency
+is pinned to `v1.104.6-r1`; the app release is `v1.104.6`. The universal APK
 supports arm64-v8a, armeabi-v7a, x86 and x86_64. Install it over the previous
 version to keep your settings and login.
 
@@ -21,13 +22,13 @@ This fork adds AWG and QUIC support to the open source Tailscale Android client.
 
 ## Install or upgrade
 
-1. Download [the signed 1.104.4 APK](https://github.com/LiuTangLei/tailscale-android/releases/download/v1.104.4/tailscale-release-signed.apk).
+1. Download [the signed 1.104.6 APK](https://github.com/LiuTangLei/tailscale-android/releases/download/v1.104.6/tailscale-release-signed.apk).
 2. Open the APK on your Android device and allow installation from your browser
    or file manager if prompted.
 3. Install over your existing fork installation to keep your settings and login.
 
 The same APK supports arm64-v8a, armeabi-v7a, x86 and x86_64. Release details
-and checksums are on the [1.104.4 release page](https://github.com/LiuTangLei/tailscale-android/releases/tag/v1.104.4).
+and checksums are on the [1.104.6 release page](https://github.com/LiuTangLei/tailscale-android/releases/tag/v1.104.6).
 
 ## Preparing a build environment
 
