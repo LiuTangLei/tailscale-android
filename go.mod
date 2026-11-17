@@ -1,11 +1,11 @@
 module github.com/tailscale/tailscale-android
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/LiuTangLei/wireguard-go v0.0.35
 	golang.org/x/mobile v0.0.0-20240806205939-81131f6468ab
-	tailscale.com v1.104.6
+	tailscale.com v1.104.7
 )
 
 require (
@@ -100,7 +100,7 @@ require (
 	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72 // indirect
 )
 
-replace tailscale.com => github.com/LiuTangLei/tailscale v1.104.6-r1
+replace tailscale.com => github.com/LiuTangLei/tailscale v1.104.7
 
 replace github.com/quic-go/quic-go => github.com/LiuTangLei/quic-go v0.65.0-quic.4
 
